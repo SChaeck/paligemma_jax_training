@@ -35,8 +35,8 @@ config_pi_training/
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/config_pi_training.git
-cd config_pi_training
+git clone https://github.com/SChaeck/paligemma_jax_training.git
+cd paligemma_jax_training
 
 # 2. Set up Kaggle credentials (for model download)
 mkdir -p ~/.kaggle
