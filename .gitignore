@@ -1,0 +1,77 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+paligemma_training/
+
+# Model files
+*.npz
+*.model
+paligemma*
+*.ckpt
+
+# Outputs
+outputs/
+logs/
+checkpoints/
+
+# Data
+*.jsonl
+images/
+
+# Kaggle
+kaggle.json
+
+# Jupyter
+.ipynb_checkpoints
+*.ipynb
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# TensorBoard
+events.out.tfevents.*
+
+# Weights & Biases
+wandb/
+
+# Environment files - all presets in envs/ are tracked
+.env
+.env.local
+# envs/ directory contains all preset files (tracked)
+
+# Virtual environment
+venv/
