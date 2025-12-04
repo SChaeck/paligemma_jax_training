@@ -51,15 +51,20 @@ gsutil -m rsync -r ../XVR gs://YOUR_BUCKET/data/XVR
 **On-start Script:**
 ```bash
 cd /workspace
-git clone https://github.com/YOUR_REPO/paligemma_jax_training.git
+git clone https://github.com/SChaeck/paligemma_jax_training.git
 cd paligemma_jax_training
 GCP_BUCKET=gs://YOUR_BUCKET ./setup.sh
 ```
+
+**참고:** `YOUR_BUCKET`을 실제 GCP 버킷 이름으로 변경하세요.
 
 #### 3. 학습
 
 ```bash
 conda activate paligemma_training
+
+# W&B 로그인 (선택사항, 로깅을 원하는 경우)
+wandb login
 
 # Quick overfit test (5분, 파이프라인 확인용)
 python scripts/01_overfit_test.py
