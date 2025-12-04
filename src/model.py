@@ -351,10 +351,12 @@ def save_checkpoint(
     # Convert to numpy and save
     params_numpy = jax.device_get(params)
 
-    # Flatten parameters for saving
+    # Flatten parameters for saving with 'params/' prefix (matches original checkpoint format)
     flat_params = {}
     for path, arr in big_vision.utils.tree_flatten_with_names(params_numpy)[0]:
-        flat_params[path] = arr
+        # Add 'params/' prefix to match original checkpoint format
+        key = f"params/{path}"
+        flat_params[key] = arr
 
     # Save parameters
     np.savez(checkpoint_path, **flat_params)

@@ -43,9 +43,9 @@ def _get_str(key: str, default: str = "") -> str:
 @dataclass
 class ModelConfig:
     """Model configuration."""
-    checkpoint_path: str = "./paligemma-3b-pt-224.f16.npz"
+    checkpoint_path: str = "./checkpoints/pi05_base_paligemma.npz"
     checkpoint_url: Optional[str] = None  # URL to download checkpoint if not exists locally
-    tokenizer_path: str = "./paligemma_tokenizer.model"
+    tokenizer_path: str = "./assets/paligemma_tokenizer.model"
     kaggle_handle: str = "google/paligemma/jax/paligemma-3b-pt-224"
 
     llm_variant: str = "gemma_2b"
@@ -63,10 +63,12 @@ class TrainingConfig:
     trainable_params: str = "attention_only"
     learning_rate: float = 0.03
     batch_size: int = 8
+    gradient_accumulation_steps: int = 1  # Effective batch size = batch_size * gradient_accumulation_steps
     num_epochs: int = 10
     warmup_percent: float = 0.10
-    lr_schedule: str = "cosine"
+    lr_schedule: str = "cosine"  # "cosine", "constant", "linear"
     max_grad_norm: float = 1.0
+    precision: str = "float32"  # "float32", "bfloat16", "float16"
     seed: int = 42
 
 
@@ -161,9 +163,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
         experiment_name=_get_str("EXPERIMENT_NAME", "default"),
 
         model=ModelConfig(
-            checkpoint_path=_get_str("MODEL_CHECKPOINT_PATH", "./paligemma-3b-pt-224.f16.npz"),
+            checkpoint_path=_get_str("MODEL_CHECKPOINT_PATH", "./checkpoints/pi05_base_paligemma.npz"),
             checkpoint_url=_get_str("MODEL_CHECKPOINT_URL", "") or None,
-            tokenizer_path=_get_str("MODEL_TOKENIZER_PATH", "./paligemma_tokenizer.model"),
+            tokenizer_path=_get_str("MODEL_TOKENIZER_PATH", "./assets/paligemma_tokenizer.model"),
             kaggle_handle=_get_str("MODEL_KAGGLE_HANDLE", "google/paligemma/jax/paligemma-3b-pt-224"),
             llm_variant=_get_str("MODEL_LLM_VARIANT", "gemma_2b"),
             vocab_size=_get_int("MODEL_VOCAB_SIZE", 257152),
@@ -178,10 +180,12 @@ def load_config(env_file: Optional[str] = None) -> Config:
             trainable_params=_get_str("TRAINABLE_PARAMS", "attention_only"),
             learning_rate=_get_float("LEARNING_RATE", 0.03),
             batch_size=_get_int("BATCH_SIZE", 8),
+            gradient_accumulation_steps=_get_int("GRADIENT_ACCUMULATION_STEPS", 1),
             num_epochs=_get_int("NUM_EPOCHS", 10),
             warmup_percent=_get_float("WARMUP_PERCENT", 0.10),
             lr_schedule=_get_str("LR_SCHEDULE", "cosine"),
             max_grad_norm=_get_float("MAX_GRAD_NORM", 1.0),
+            precision=_get_str("PRECISION", "float32"),
             seed=_get_int("SEED", 42),
         ),
 

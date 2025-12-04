@@ -1,19 +1,18 @@
 # =============================================================================
 # PaliGemma Fine-tuning Requirements (JAX/GPU)
-# Python 3.10 | CUDA 12.9 | NVIDIA L40S (46GB)
+# Python 3.10 | CUDA 12.x | NVIDIA L40S (46GB)
 # =============================================================================
 
 # Core JAX with CUDA support
-# Use jax[cuda12_local] for proper GPU detection (installs JAX 0.6.2+ with CUDA plugins)
-# This ensures CUDA devices are properly recognized
-jax[cuda12_local]
+# JAX 0.4.30 is compatible with big_vision and flax 0.8.4
+jax[cuda12]==0.4.30
 
 # Machine Learning Collections for configuration management
 ml-collections>=0.1.1
 
 # Neural Network utilities
 einops>=0.8.0
-flax>=0.8.5
+flax==0.8.4
 
 # Tokenization
 sentencepiece>=0.2.0
@@ -38,6 +37,8 @@ numpy>=1.26.4,<2.0.0
 overrides>=7.7.0
 absl-py>=2.1.0
 python-dotenv>=1.0.0
+filelock>=3.13.0
+requests>=2.31.0
 
 # Optional: Jupyter for notebook compatibility
 jupyter>=1.1.1
