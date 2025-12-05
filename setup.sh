@@ -26,7 +26,7 @@ CONDA_ENV_NAME="paligemma_training"
 GCP_BUCKET="${GCP_BUCKET:-gs://your-bucket-name}"
 GCP_CHECKPOINT="${GCP_BUCKET}/checkpoints/pi05_base_paligemma.npz"
 GCP_TOKENIZER="${GCP_BUCKET}/assets/paligemma_tokenizer.model"
-GCP_XVR_DATA="${GCP_BUCKET}/data/XVR"
+GCP_XVR_DATA="${GCP_BUCKET}/XVR"
 
 # Local paths
 LOCAL_CHECKPOINT="$PROJECT_DIR/checkpoints/pi05_base_paligemma.npz"
@@ -117,7 +117,7 @@ pip install --upgrade pip -q
 # 3. Install Dependencies
 # -----------------------------------------------------------------------------
 echo -e "\n${YELLOW}[3/6] Installing Python dependencies...${NC}"
-pip install -r "$PROJECT_DIR/requirements.txt" -q
+pip install -r "$PROJECT_DIR/requirements.txt"
 
 # -----------------------------------------------------------------------------
 # 4. Clone Big Vision
