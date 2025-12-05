@@ -226,9 +226,9 @@ def train_with_validation(config):
     for step in range(1, total_steps + 1):
         step_start = time.time()
 
-        # Get batch
-        batch = next(train_iterator)
-        batch = {k: np.stack([v]) for k, v in batch.items()}
+        # Get batch - collect batch_size samples
+        batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
+        batch = {k: np.stack([s[k] for s in batch_samples]) for k in batch_samples[0].keys()}
         batch = shard_batch(batch, data_sharding, config)
 
         # Get learning rate
