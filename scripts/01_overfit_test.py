@@ -43,6 +43,7 @@ from src.data import XVRDataset, create_train_iterator
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
+    compiled_train_step_with_accumulation,
     MetricsTracker,
     create_data_sharding,
     shard_batch,
@@ -64,9 +65,26 @@ def setup_environment(config):
     if config.system.tf_allow_growth:
         os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
+    # Set random seed for reproducibility
+    rng_key = jax.random.PRNGKey(config.training.seed)
+    print(f"Random seed:  {config.training.seed}")
+
+    # Set precision
+    if config.training.precision == "bfloat16":
+        jax.config.update("jax_default_matmul_precision", "bfloat16")
+        print(f"Precision:    bfloat16")
+    elif config.training.precision == "float16":
+        jax.config.update("jax_default_matmul_precision", "float16")
+        print(f"Precision:    float16")
+    else:
+        jax.config.update("jax_default_matmul_precision", "float32")
+        print(f"Precision:    float32")
+
     print(f"JAX version:  {jax.__version__}")
     print(f"JAX devices:  {jax.device_count()}")
     print(f"Device list:  {jax.devices()}\n")
+    
+    return rng_key
 
 
 def run_overfit_test(config):
@@ -81,7 +99,7 @@ def run_overfit_test(config):
     print("Expected: Training loss -> 0, Training accuracy -> 100%\n")
 
     # Setup
-    setup_environment(config)
+    rng_key = setup_environment(config)
 
     # Create output directories
     Path(config.checkpoint_dir).mkdir(parents=True, exist_ok=True)
@@ -195,6 +213,7 @@ def run_overfit_test(config):
             model,
             trainable_mask,
             lr,
+            max_grad_norm=config.training.max_grad_norm,
         )
 
         loss = jax.device_get(loss)

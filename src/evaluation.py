@@ -55,14 +55,64 @@ def evaluate_model(
     ground_truths = []
     data_sharding = create_data_sharding(config)
 
-    for batch in eval_iterator:
-        # Convert to batch and shard
-        batch_dict = {k: np.stack([v]) for k, v in batch.items() if k not in ['sample_id', 'ground_truth']}
-        # Add _mask key required by big_vision decode_fn
-        batch_dict["_mask"] = np.ones(batch_dict["image"].shape[0], dtype=bool)
+    # Collect samples into batches
+    batch_samples = []
+    sample_ids = []
+    batch_ground_truths = []
+    
+    for sample in eval_iterator:
+        batch_samples.append(sample)
+        sample_ids.append(sample.get('sample_id', None))
+        batch_ground_truths.append(sample.get('ground_truth', None))
+        
+        # Process when we have a full batch or at the end
+        if len(batch_samples) >= config.eval.batch_size:
+            # Create batch dict
+            batch_dict = {
+                k: np.stack([s[k] for s in batch_samples])
+                for k in batch_samples[0].keys()
+                if k not in ['sample_id', 'ground_truth']
+            }
+            # Add _mask key required by big_vision decode_fn
+            batch_dict["_mask"] = np.ones(len(batch_samples), dtype=bool)
+            batch_dict = shard_batch(batch_dict, data_sharding, config)
+
+            # Generate predictions (limit length to avoid infinite generation)
+            max_gen_len = min(32, config.data.max_seq_length)
+            tokens = decode_fn(
+                {"params": params},
+                batch=batch_dict,
+                max_decode_len=max_gen_len,
+                sampler=config.eval.sampler,
+            )
+
+            # Decode tokens for each sample in batch
+            tokens = jax.device_get(tokens)
+            for i, token_seq in enumerate(tokens):
+                pred_text = postprocess_tokens(token_seq, tokenizer)
+
+                # Remove prefix from prediction
+                if pred_text.startswith(config.data.prompt_prefix):
+                    pred_text = pred_text[len(config.data.prompt_prefix):].strip()
+
+                predictions.append(pred_text)
+                ground_truths.append(batch_ground_truths[i])
+            
+            # Reset batch
+            batch_samples = []
+            sample_ids = []
+            batch_ground_truths = []
+    
+    # Process remaining samples if any
+    if batch_samples:
+        batch_dict = {
+            k: np.stack([s[k] for s in batch_samples])
+            for k in batch_samples[0].keys()
+            if k not in ['sample_id', 'ground_truth']
+        }
+        batch_dict["_mask"] = np.ones(len(batch_samples), dtype=bool)
         batch_dict = shard_batch(batch_dict, data_sharding, config)
 
-        # Generate prediction (limit length to avoid infinite generation)
         max_gen_len = min(32, config.data.max_seq_length)
         tokens = decode_fn(
             {"params": params},
@@ -71,16 +121,15 @@ def evaluate_model(
             sampler=config.eval.sampler,
         )
 
-        # Decode tokens
-        tokens = jax.device_get(tokens)[0]
-        pred_text = postprocess_tokens(tokens, tokenizer)
+        tokens = jax.device_get(tokens)
+        for i, token_seq in enumerate(tokens):
+            pred_text = postprocess_tokens(token_seq, tokenizer)
 
-        # Remove prefix from prediction
-        if pred_text.startswith(config.data.prompt_prefix):
-            pred_text = pred_text[len(config.data.prompt_prefix):].strip()
+            if pred_text.startswith(config.data.prompt_prefix):
+                pred_text = pred_text[len(config.data.prompt_prefix):].strip()
 
-        predictions.append(pred_text)
-        ground_truths.append(batch['ground_truth'])
+            predictions.append(pred_text)
+            ground_truths.append(batch_ground_truths[i])
 
     # Compute accuracy (exact match)
     correct_exact = sum(

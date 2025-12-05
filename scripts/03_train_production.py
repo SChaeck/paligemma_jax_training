@@ -26,6 +26,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
 
@@ -43,6 +44,7 @@ from src.data import XVRDataset, create_train_iterator
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
+    compiled_train_step_with_accumulation,
     MetricsTracker,
     create_data_sharding,
     shard_batch,
@@ -64,41 +66,194 @@ def setup_environment(config):
     if config.system.tf_allow_growth:
         os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
 
+    # Set random seed for reproducibility
+    rng_key = jax.random.PRNGKey(config.training.seed)
+    print(f"Random seed:  {config.training.seed}")
+
+    # Set precision
+    if config.training.precision == "bfloat16":
+        jax.config.update("jax_default_matmul_precision", "bfloat16")
+        print(f"Precision:    bfloat16")
+    elif config.training.precision == "float16":
+        jax.config.update("jax_default_matmul_precision", "float16")
+        print(f"Precision:    float16")
+    else:
+        jax.config.update("jax_default_matmul_precision", "float32")
+        print(f"Precision:    float32")
+
     print(f"JAX version:  {jax.__version__}")
     print(f"JAX devices:  {jax.device_count()}")
     print(f"Device list:  {jax.devices()}\n")
+    
+    return rng_key
 
 
 def setup_wandb(config):
-    """Initialize Weights & Biases if enabled."""
+    """Initialize Weights & Biases if enabled. Tries multiple methods to ensure success."""
     if not config.logging.use_wandb:
         return None
 
     try:
         import wandb
-        # Use personal account if entity is None or empty
-        wandb.init(
-            project=config.logging.wandb_project,
-            entity=config.logging.wandb_entity,  # None = personal account
-            name=f"production_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-            config={
-                "learning_rate": config.training.learning_rate,
-                "batch_size": config.training.batch_size,
-                "num_epochs": config.training.num_epochs,
-                "trainable_params": config.training.trainable_params,
-                "lr_schedule": config.training.lr_schedule,
-            },
-            tags=["production"],
-        )
-        print("  W&B initialized")
-        return wandb
+        import wandb.apis.public as wandb_api
     except ImportError:
         print("  W&B not installed, skipping")
         return None
+
+    base_kwargs = {
+        "project": config.logging.wandb_project,
+        "name": f"production_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        "config": {
+            "learning_rate": config.training.learning_rate,
+            "batch_size": config.training.batch_size,
+            "num_epochs": config.training.num_epochs,
+            "trainable_params": config.training.trainable_params,
+            "lr_schedule": config.training.lr_schedule,
+        },
+        "tags": ["production"],
+        # Short timeout to avoid blocking - will fallback to offline
+        "settings": wandb.Settings(init_timeout=10),
+    }
+
+    # Get current username first
+    current_user = None
+    try:
+        api = wandb_api.Api()
+        # viewer is a property, not a method
+        viewer = api.viewer
+        if hasattr(viewer, 'username'):
+            current_user = viewer.username
+        elif hasattr(viewer, 'entity'):
+            current_user = viewer.entity
+        elif isinstance(viewer, dict):
+            current_user = viewer.get("username") or viewer.get("entity")
     except Exception as e:
-        print(f"  WARNING: Failed to initialize W&B: {e}")
-        print("  Continuing without W&B logging...")
-        return None
+        # Try alternative method
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["wandb", "whoami"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                # Parse output like "schaeck (configint)"
+                output = result.stdout.strip()
+                current_user = output.split()[0] if output else None
+        except Exception:
+            pass
+        if not current_user:
+            print(f"  Could not get current user: {e}")
+
+    # Try offline mode FIRST to avoid blocking
+    # This ensures training can start immediately
+    offline_kwargs = {
+        "project": config.logging.wandb_project,
+        "name": f"production_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        "mode": "offline",
+        "config": {
+            "learning_rate": config.training.learning_rate,
+            "batch_size": config.training.batch_size,
+            "num_epochs": config.training.num_epochs,
+            "trainable_params": config.training.trainable_params,
+            "lr_schedule": config.training.lr_schedule,
+        },
+        "tags": ["production"],
+    }
+    if current_user:
+        offline_kwargs["entity"] = current_user
+    elif config.logging.wandb_entity:
+        offline_kwargs["entity"] = config.logging.wandb_entity
+    
+    # Try offline mode first (fast, no blocking)
+    try:
+        print("  Initializing W&B in offline mode (fast, no blocking)...")
+        wandb.init(**offline_kwargs)
+        if wandb.run is not None:
+            print("  W&B initialized in OFFLINE mode")
+            print("  Note: Run 'wandb sync' after training to upload logs")
+            return wandb
+    except Exception as e:
+        print(f"  Offline mode failed: {e}")
+    
+    # If offline fails, try online with short timeout
+    print("  Trying online mode with short timeout (10s)...")
+    methods = []
+    
+    # Method 1: Use explicitly configured entity
+    if config.logging.wandb_entity:
+        methods.append(("explicit entity", {**base_kwargs, "entity": config.logging.wandb_entity}))
+    
+    # Method 2: Use current user directly
+    if current_user:
+        methods.append(("current user", {**base_kwargs, "entity": current_user}))
+
+    # Try each method until one succeeds
+    last_error = None
+    import os
+    import signal
+    
+    for method_name, init_kwargs in methods:
+        try:
+            # Completely reset wandb state before each attempt
+            try:
+                if wandb.run is not None:
+                    wandb.finish()
+            except:
+                pass
+            # Clear any pending wandb state by resetting the run
+            try:
+                wandb.run = None
+            except:
+                pass
+            
+            # Set environment variable BEFORE wandb.init() if entity is specified
+            old_entity_env = None
+            if "entity" in init_kwargs and init_kwargs["entity"]:
+                old_entity_env = os.environ.get("WANDB_ENTITY")
+                os.environ["WANDB_ENTITY"] = init_kwargs["entity"]
+            
+            try:
+                # Add reinit to ensure clean state
+                init_kwargs_final = {**init_kwargs, "reinit": True}
+                
+                # Call wandb.init() - this may block, but we need to try
+                print(f"  Trying wandb.init() with method: {method_name}...")
+                wandb.init(**init_kwargs_final)
+                
+                # Verify initialization succeeded
+                if wandb.run is not None:
+                    # Double-check entity is correct
+                    if "entity" in init_kwargs and wandb.run.entity != init_kwargs["entity"]:
+                        print(f"  Warning: Entity mismatch. Expected {init_kwargs['entity']}, got {wandb.run.entity}")
+                    print(f"  W&B initialized (method: {method_name})")
+                    print(f"  W&B entity: {wandb.run.entity}")
+                    print(f"  W&B run URL: {wandb.run.url}")
+                    return wandb
+                else:
+                    raise RuntimeError("wandb.init() returned but wandb.run is None")
+            finally:
+                # Restore environment variable
+                if old_entity_env is not None:
+                    if old_entity_env:
+                        os.environ["WANDB_ENTITY"] = old_entity_env
+                    elif "WANDB_ENTITY" in os.environ:
+                        del os.environ["WANDB_ENTITY"]
+        except Exception as e:
+            last_error = e
+            try:
+                if wandb.run is not None:
+                    wandb.finish()
+            except:
+                pass
+            continue
+    
+    # All online methods failed - offline should have worked, but if not, continue
+    print(f"  WARNING: Failed to initialize W&B online after trying {len(methods)} methods")
+    print(f"  Last error: {last_error}")
+    print("  Continuing without W&B logging...")
+    return None
 
 
 def train_production(config):
@@ -115,7 +270,7 @@ def train_production(config):
     print(f"Experiment: {config.experiment_name}\n")
 
     # Setup
-    setup_environment(config)
+    rng_key = setup_environment(config)
     wandb = setup_wandb(config)
 
     # Create output directories
@@ -190,11 +345,15 @@ def train_production(config):
     # ==========================================================================
     print_banner("Step 3: Setting Up Training")
 
-    steps_per_epoch = train_dataset.num_samples // config.training.batch_size
+    # Account for gradient accumulation in step calculation
+    effective_batch_size = config.training.batch_size * config.training.gradient_accumulation_steps
+    steps_per_epoch = train_dataset.num_samples // effective_batch_size
     total_steps = steps_per_epoch * config.training.num_epochs
 
     print(f"  Epochs: {config.training.num_epochs}")
     print(f"  Batch size: {config.training.batch_size}")
+    print(f"  Gradient accumulation steps: {config.training.gradient_accumulation_steps}")
+    print(f"  Effective batch size: {effective_batch_size}")
     print(f"  Steps per epoch: {steps_per_epoch}")
     print(f"  Total steps: {total_steps}")
     print(f"  Learning rate: {config.training.learning_rate}")
@@ -222,6 +381,11 @@ def train_production(config):
     print("Starting production training...\n")
     start_time = time.time()
 
+    # Gradient accumulation: collect multiple batches before updating
+    accum_steps = config.training.gradient_accumulation_steps
+    accum_batches = []
+    effective_step = 0
+
     for step in range(1, total_steps + 1):
         step_start = time.time()
 
@@ -229,18 +393,42 @@ def train_production(config):
         batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
         batch = {k: np.stack([s[k] for s in batch_samples]) for k in batch_samples[0].keys()}
         batch = shard_batch(batch, data_sharding, config)
+        
+        accum_batches.append(batch)
 
-        # Get learning rate
-        lr = lr_schedule(step)
+        # Only update when we have accumulated enough batches
+        should_update = len(accum_batches) >= accum_steps or step == total_steps
+        
+        if should_update:
+            effective_step += 1
+            # Get learning rate (use effective step for LR schedule)
+            lr = lr_schedule(effective_step)
 
-        # Training step
-        params, loss = compiled_train_step(
-            params,
-            batch,
-            model,
-            trainable_mask,
-            lr,
-        )
+            # Training step with or without accumulation
+            if accum_steps > 1 and len(accum_batches) > 1:
+                params, loss = compiled_train_step_with_accumulation(
+                    params,
+                    accum_batches,
+                    model,
+                    trainable_mask,
+                    lr,
+                    max_grad_norm=config.training.max_grad_norm,
+                )
+            else:
+                params, loss = compiled_train_step(
+                    params,
+                    accum_batches[0],
+                    model,
+                    trainable_mask,
+                    lr,
+                    max_grad_norm=config.training.max_grad_norm,
+                )
+            
+            # Reset accumulation
+            accum_batches = []
+        else:
+            # Still accumulating, skip logging but continue loop
+            continue
 
         loss = float(jax.device_get(loss))
         step_time = time.time() - step_start
