@@ -81,7 +81,7 @@ class DataConfig:
     eval_file: str = "xvr_eval.jsonl"
     image_dir: str = "images"
 
-    max_seq_length: int = 256
+    max_seq_length: int = 512
     shuffle_buffer_size: int = 1000
     num_parallel_calls: int = 8
     prompt_prefix: str = "answer en"
@@ -195,7 +195,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             valid_file=_get_str("DATA_VALID_FILE", "valid.jsonl"),
             eval_file=_get_str("DATA_EVAL_FILE", "xvr_eval.jsonl"),
             image_dir=_get_str("DATA_IMAGE_DIR", "images"),
-            max_seq_length=_get_int("MAX_SEQ_LENGTH", 256),
+            max_seq_length=_get_int("MAX_SEQ_LENGTH", 512),
             shuffle_buffer_size=_get_int("SHUFFLE_BUFFER_SIZE", 1000),
             num_parallel_calls=_get_int("NUM_PARALLEL_CALLS", 8),
             prompt_prefix=_get_str("PROMPT_PREFIX", "answer en"),
