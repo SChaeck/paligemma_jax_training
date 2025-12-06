@@ -524,11 +524,16 @@ def train_production(config):
     # ==========================================================================
     print_banner("Step 5: Final Evaluation")
 
+    # Save debug results for final evaluation
+    final_results_path = os.path.join(config.checkpoint_dir, "final_eval_results.json")
+
     final_metrics = evaluate_model(
         model, params, decode_fn, tokenizer,
         valid_dataset, config,
         num_examples=None,  # Full validation
         verbose=True,
+        save_results_path=final_results_path,
+        max_saved_samples=100,
     )
 
     # ==========================================================================

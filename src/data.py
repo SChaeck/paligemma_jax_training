@@ -530,6 +530,8 @@ def create_eval_iterator(
             'mask_input': np.asarray(mask_input),
             'sample_id': sample['sample_id'],
             'ground_truth': sample['answer'],
+            'input_prompt': full_prefix,  # For debugging: the actual prompt sent to model
+            'num_images': len(loaded_images),  # Number of images combined
         }
 
         count += 1

@@ -149,6 +149,9 @@ def main():
     # ==========================================================================
     print_banner("Running Evaluation")
 
+    # Prepare save path for debug results
+    results_save_path = os.path.join(config.logging.output_dir, f"eval_results_{args.split}.json")
+
     metrics = evaluate_model(
         model,
         params,
@@ -158,6 +161,8 @@ def main():
         config,
         num_examples=args.num_examples,
         verbose=True,
+        save_results_path=results_save_path,
+        max_saved_samples=100,
     )
 
     # ==========================================================================

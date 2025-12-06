@@ -257,11 +257,16 @@ def run_overfit_test(config):
     # ==========================================================================
     print_banner("Step 5: Final Evaluation")
 
+    # Save debug results for final evaluation
+    final_results_path = os.path.join(config.checkpoint_dir, "overfit_eval_results.json")
+
     final_metrics = evaluate_model(
         model, params, decode_fn, tokenizer,
         eval_dataset, config,
         num_examples=None,  # Evaluate all
         verbose=True,
+        save_results_path=final_results_path,
+        max_saved_samples=100,
     )
 
     # ==========================================================================
