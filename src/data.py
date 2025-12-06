@@ -212,23 +212,65 @@ def preprocess_image(
 def preprocess_multi_images(
     images: list,
     size: int = 224,
-    grid_layout: str = "auto",
-) -> np.ndarray:
+    max_images: int = 6,
+) -> Tuple[np.ndarray, int]:
     """
-    Preprocess multiple images by combining them into a single grid image.
+    Preprocess multiple images as separate frames for PaliGemma.
 
-    For multi-image tasks like XVR, this combines images into a grid so
-    the model can see all images at once. The grid is then resized to the
-    target size to maintain consistent input dimensions.
+    IMPORTANT: big_vision PaliGemma handles multi-image by treating them as video frames.
+    When image has shape [B, T, H, W, 3] (5D), it processes each frame separately
+    and concatenates their tokens in the sequence.
+
+    This is the CORRECT approach - NOT combining into a grid!
 
     Args:
         images: List of PIL Images
         size: Target output size (height and width)
-        grid_layout: Layout strategy - "auto", "horizontal", "vertical", or "2x2"
+        max_images: Maximum number of images to process
 
     Returns:
-        Preprocessed combined image as numpy array in range [-1, 1]
+        Tuple of:
+        - Preprocessed images as numpy array with shape [num_images, H, W, 3] in range [-1, 1]
+        - Number of actual images
     """
+    if len(images) == 0:
+        raise ValueError("At least one image is required")
+
+    # Limit number of images
+    images = images[:max_images]
+    num_images = len(images)
+
+    # Preprocess each image individually
+    processed_images = []
+    for img in images:
+        processed = preprocess_single_image(img, size)
+        processed_images.append(processed)
+
+    # Stack into [num_images, H, W, 3]
+    stacked = np.stack(processed_images, axis=0)
+
+    return stacked, num_images
+
+
+def preprocess_multi_images_grid(
+    images: list,
+    size: int = 224,
+    grid_layout: str = "auto",
+) -> np.ndarray:
+    """
+    DEPRECATED: This combines images into a grid, which loses information.
+    Use preprocess_multi_images() instead for proper multi-image handling.
+
+    Preprocess multiple images by combining them into a single grid image.
+    Kept for backward compatibility only.
+    """
+    import warnings
+    warnings.warn(
+        "preprocess_multi_images_grid() combines images into a grid which loses information. "
+        "Use preprocess_multi_images() for proper multi-image handling.",
+        DeprecationWarning
+    )
+
     if len(images) == 0:
         raise ValueError("At least one image is required")
 
@@ -325,25 +367,56 @@ def preprocess_multi_images(
     return final.numpy() / 127.5 - 1.0
 
 
+def get_image_token_count(image_size: int = 224, patch_size: int = 14) -> int:
+    """
+    Calculate number of tokens per image for PaliGemma ViT encoder.
+
+    PaliGemma uses a ViT encoder that splits the image into patches.
+    Each patch becomes one token.
+
+    Args:
+        image_size: Image size (e.g., 224)
+        patch_size: Patch size (e.g., 14 for So400m/14)
+
+    Returns:
+        Number of tokens per image
+    """
+    num_patches_per_side = image_size // patch_size
+    return num_patches_per_side * num_patches_per_side  # 224/14 = 16 -> 16*16 = 256
+
+
 def preprocess_tokens(
     prefix: str,
     suffix: Optional[str] = None,
     seqlen: Optional[int] = None,
     tokenizer=None,
+    num_images: int = 1,
+    image_size: int = 224,
+    patch_size: int = 14,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Tokenize and prepare text for PaliGemma model.
 
     PaliGemma uses a prefix (full attention) and suffix (causal attention) structure.
 
+    IMPORTANT: The model prepends image tokens to the text sequence internally.
+    We need to account for this in mask_ar and mask_loss so that:
+    - Image tokens use full attention (mask_ar=0) and are not trained (mask_loss=0)
+    - Prefix text uses full attention (mask_ar=0) and is not trained (mask_loss=0)
+    - Suffix text uses causal attention (mask_ar=1) and IS trained (mask_loss=1)
+
     Args:
-        prefix: Prefix text (e.g., "answer en")
+        prefix: Prefix text (e.g., "answer en What is this?")
         suffix: Suffix text (e.g., the answer)
-        seqlen: Maximum sequence length (will pad if needed)
+        seqlen: Maximum sequence length for TEXT only (will pad if needed)
         tokenizer: SentencePiece tokenizer
+        num_images: Number of images (each adds tokens to the sequence)
+        image_size: Image size for calculating token count
+        patch_size: Patch size (14 for So400m/14)
 
     Returns:
         Tuple of (tokens, mask_ar, mask_loss, mask_input)
+        Note: These are for TEXT tokens only. The model handles image tokens internally.
     """
     separator = "\n"
 
@@ -389,6 +462,105 @@ def preprocess_tokens(
     )
 
 
+def collate_batch(samples: list, max_images: int = 6, image_size: int = 224) -> Dict[str, np.ndarray]:
+    """
+    Collate a list of samples into a batch for training.
+
+    This handles the tricky part of batching multi-image samples where
+    each sample can have a different number of images.
+
+    For big_vision PaliGemma, images need to be in shape [B, T, H, W, 3]
+    where T is the number of frames/images. We pad to max_images.
+
+    Args:
+        samples: List of sample dictionaries from the iterator
+        max_images: Maximum number of images to pad to
+        image_size: Image size
+
+    Returns:
+        Batched dictionary with:
+        - image: [B, max_images, H, W, 3]
+        - text: [B, seq_len]
+        - mask_ar: [B, seq_len]
+        - mask_loss: [B, seq_len]
+        - num_images: [B] actual number of images per sample
+    """
+    batch_size = len(samples)
+
+    # Get dimensions from first sample
+    seq_len = samples[0]['text'].shape[0]
+
+    # Initialize batch arrays
+    batch_images = np.zeros((batch_size, max_images, image_size, image_size, 3), dtype=np.float32)
+    batch_text = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_mask_ar = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_mask_loss = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_num_images = np.zeros((batch_size,), dtype=np.int32)
+
+    for i, sample in enumerate(samples):
+        num_images = sample['num_images']
+        batch_num_images[i] = num_images
+
+        # Copy images (sample['image'] has shape [num_images, H, W, 3])
+        batch_images[i, :num_images] = sample['image']
+
+        # Copy text and masks
+        batch_text[i] = sample['text']
+        batch_mask_ar[i] = sample['mask_ar']
+        batch_mask_loss[i] = sample['mask_loss']
+
+    return {
+        'image': batch_images,
+        'text': batch_text,
+        'mask_ar': batch_mask_ar,
+        'mask_loss': batch_mask_loss,
+        'num_images': batch_num_images,
+    }
+
+
+def collate_eval_batch(samples: list, max_images: int = 6, image_size: int = 224) -> Dict[str, np.ndarray]:
+    """
+    Collate a list of samples into a batch for evaluation.
+
+    Similar to collate_batch but preserves evaluation metadata.
+    """
+    batch_size = len(samples)
+    seq_len = samples[0]['text'].shape[0]
+
+    batch_images = np.zeros((batch_size, max_images, image_size, image_size, 3), dtype=np.float32)
+    batch_text = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_mask_ar = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_mask_input = np.zeros((batch_size, seq_len), dtype=np.int32)
+    batch_num_images = np.zeros((batch_size,), dtype=np.int32)
+
+    sample_ids = []
+    ground_truths = []
+    input_prompts = []
+
+    for i, sample in enumerate(samples):
+        num_images = sample['num_images']
+        batch_num_images[i] = num_images
+        batch_images[i, :num_images] = sample['image']
+        batch_text[i] = sample['text']
+        batch_mask_ar[i] = sample['mask_ar']
+        batch_mask_input[i] = sample['mask_input']
+
+        sample_ids.append(sample['sample_id'])
+        ground_truths.append(sample['ground_truth'])
+        input_prompts.append(sample['input_prompt'])
+
+    return {
+        'image': batch_images,
+        'text': batch_text,
+        'mask_ar': batch_mask_ar,
+        'mask_input': batch_mask_input,
+        'num_images': batch_num_images,
+        'sample_ids': sample_ids,
+        'ground_truths': ground_truths,
+        'input_prompts': input_prompts,
+    }
+
+
 def postprocess_tokens(tokens: np.ndarray, tokenizer) -> str:
     """
     Detokenize model output back to text.
@@ -416,6 +588,7 @@ def create_train_iterator(
     dataset: XVRDataset,
     batch_size: int,
     prompt_prefix: str = "answer en",
+    max_images: int = 6,
 ) -> Iterator[Dict[str, np.ndarray]]:
     """
     Create a training data iterator.
@@ -424,9 +597,10 @@ def create_train_iterator(
         dataset: XVRDataset instance
         batch_size: Number of examples per batch
         prompt_prefix: Prefix for all prompts (e.g., "answer en")
+        max_images: Maximum number of images per sample
 
     Yields:
-        Dictionary with batched data
+        Dictionary with sample data (NOT batched - batching happens in training loop)
     """
     tf_dataset = dataset.get_tfdata(shuffle=True, repeat=True)
 
@@ -436,20 +610,25 @@ def create_train_iterator(
         if not sample['images']:
             continue
 
-        # Load and process ALL images (multi-image support)
+        # Load and process ALL images as separate frames (NOT grid!)
         try:
             loaded_images = []
             for img_path in sample['images']:
                 img = dataset.load_image(img_path)
                 loaded_images.append(img)
 
-            # Combine multiple images into a grid
-            image = preprocess_multi_images(loaded_images, size=dataset.image_size)
+            # Process images as separate frames [num_images, H, W, 3]
+            # This is the CORRECT approach for multi-image!
+            images, num_images = preprocess_multi_images(
+                loaded_images,
+                size=dataset.image_size,
+                max_images=max_images,
+            )
         except Exception as e:
             print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
             continue
 
-        # CRITICAL FIX: Include the actual prompt/question in the prefix!
+        # Include the actual prompt/question in the prefix
         # Format: "{prompt_prefix} {actual_question}"
         full_prefix = f"{prompt_prefix} {sample['prompt']}"
 
@@ -459,13 +638,16 @@ def create_train_iterator(
             suffix=suffix,
             seqlen=dataset.max_seq_length,
             tokenizer=dataset.tokenizer,
+            num_images=num_images,
+            image_size=dataset.image_size,
         )
 
         yield {
-            'image': np.asarray(image),
+            'image': images,  # Shape: [num_images, H, W, 3]
             'text': np.asarray(tokens),
             'mask_ar': np.asarray(mask_ar),
             'mask_loss': np.asarray(mask_loss),
+            'num_images': num_images,
         }
 
 
@@ -474,6 +656,7 @@ def create_eval_iterator(
     batch_size: int,
     prompt_prefix: str = "answer en",
     num_examples: Optional[int] = None,
+    max_images: int = 6,
 ) -> Iterator[Dict[str, np.ndarray]]:
     """
     Create an evaluation data iterator.
@@ -483,9 +666,10 @@ def create_eval_iterator(
         batch_size: Number of examples per batch
         prompt_prefix: Prefix for all prompts (e.g., "answer en")
         num_examples: Maximum number of examples to yield (None = all)
+        max_images: Maximum number of images per sample
 
     Yields:
-        Dictionary with batched data for evaluation
+        Dictionary with sample data for evaluation
     """
     tf_dataset = dataset.get_tfdata(shuffle=False, repeat=False)
 
@@ -499,20 +683,24 @@ def create_eval_iterator(
         if not sample['images']:
             continue
 
-        # Load and process ALL images (multi-image support)
+        # Load and process ALL images as separate frames (NOT grid!)
         try:
             loaded_images = []
             for img_path in sample['images']:
                 img = dataset.load_image(img_path)
                 loaded_images.append(img)
 
-            # Combine multiple images into a grid
-            image = preprocess_multi_images(loaded_images, size=dataset.image_size)
+            # Process images as separate frames [num_images, H, W, 3]
+            images, num_images = preprocess_multi_images(
+                loaded_images,
+                size=dataset.image_size,
+                max_images=max_images,
+            )
         except Exception as e:
             print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
             continue
 
-        # CRITICAL FIX: Include the actual prompt/question in the prefix!
+        # Include the actual prompt/question in the prefix
         # Format: "{prompt_prefix} {actual_question}"
         full_prefix = f"{prompt_prefix} {sample['prompt']}"
 
@@ -521,17 +709,19 @@ def create_eval_iterator(
             suffix=None,
             seqlen=dataset.max_seq_length,
             tokenizer=dataset.tokenizer,
+            num_images=num_images,
+            image_size=dataset.image_size,
         )
 
         yield {
-            'image': np.asarray(image),
+            'image': images,  # Shape: [num_images, H, W, 3]
             'text': np.asarray(tokens),
             'mask_ar': np.asarray(mask_ar),
             'mask_input': np.asarray(mask_input),
             'sample_id': sample['sample_id'],
             'ground_truth': sample['answer'],
             'input_prompt': full_prefix,  # For debugging: the actual prompt sent to model
-            'num_images': len(loaded_images),  # Number of images combined
+            'num_images': num_images,  # Number of images
         }
 
         count += 1

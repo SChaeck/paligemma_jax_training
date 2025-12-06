@@ -40,7 +40,7 @@ from src.model import (
     prepare_params_for_training,
     save_checkpoint,
 )
-from src.data import XVRDataset, create_train_iterator
+from src.data import XVRDataset, create_train_iterator, collate_batch
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
@@ -340,6 +340,7 @@ def train_production(config):
         train_dataset,
         batch_size=config.training.batch_size,
         prompt_prefix=config.data.prompt_prefix,
+        max_images=config.training.max_images,
     )
 
     # ==========================================================================
@@ -391,9 +392,14 @@ def train_production(config):
     for step in range(1, total_steps + 1):
         step_start = time.time()
 
-        # Get batch - collect batch_size samples
+        # Get batch - collect batch_size samples and use proper collation
+        # This handles variable number of images per sample correctly
         batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
-        batch = {k: np.stack([s[k] for s in batch_samples]) for k in batch_samples[0].keys()}
+        batch = collate_batch(
+            batch_samples,
+            max_images=config.training.max_images,
+            image_size=config.model.img_size,
+        )
         batch = shard_batch(batch, data_sharding, config)
         
         accum_batches.append(batch)

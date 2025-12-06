@@ -61,7 +61,10 @@ class ModelConfig:
 class TrainingConfig:
     """Training configuration."""
     trainable_params: str = "attention_only"
-    learning_rate: float = 0.03
+    # CRITICAL: Use low learning rate for fine-tuning!
+    # PyTorch reference uses 2e-6, NOT 0.03!
+    # 0.03 is ~15000x too high and will destabilize training.
+    learning_rate: float = 2e-6
     batch_size: int = 8
     gradient_accumulation_steps: int = 1  # Effective batch size = batch_size * gradient_accumulation_steps
     num_epochs: int = 10
@@ -70,6 +73,7 @@ class TrainingConfig:
     max_grad_norm: float = 1.0
     precision: str = "float32"  # "float32", "bfloat16", "float16"
     seed: int = 42
+    max_images: int = 6  # Maximum number of images per sample
 
 
 @dataclass
@@ -175,7 +179,8 @@ def load_config(env_file: Optional[str] = None) -> Config:
 
         training=TrainingConfig(
             trainable_params=_get_str("TRAINABLE_PARAMS", "attention_only"),
-            learning_rate=_get_float("LEARNING_RATE", 0.03),
+            # CRITICAL: Default to 2e-6 (same as PyTorch reference), NOT 0.03!
+            learning_rate=_get_float("LEARNING_RATE", 2e-6),
             batch_size=_get_int("BATCH_SIZE", 8),
             gradient_accumulation_steps=_get_int("GRADIENT_ACCUMULATION_STEPS", 1),
             num_epochs=_get_int("NUM_EPOCHS", 10),
@@ -184,6 +189,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             max_grad_norm=_get_float("MAX_GRAD_NORM", 1.0),
             precision=_get_str("PRECISION", "float32"),
             seed=_get_int("SEED", 42),
+            max_images=_get_int("MAX_IMAGES", 6),
         ),
 
         data=DataConfig(

@@ -12,7 +12,7 @@ import jax
 from PIL import Image
 
 from .config import Config
-from .data import XVRDataset, create_eval_iterator, postprocess_tokens
+from .data import XVRDataset, create_eval_iterator, postprocess_tokens, collate_eval_batch
 from .training import create_data_sharding, shard_batch
 
 
@@ -20,10 +20,32 @@ def save_debug_image(image_array: np.ndarray, save_path: str) -> None:
     """
     Save a preprocessed image array to file for debugging.
 
+    Handles both single images [H, W, 3] and multi-image [N, H, W, 3].
+    For multi-image, creates a grid layout.
+
     Args:
-        image_array: Image in range [-1, 1] or [0, 1]
+        image_array: Image in range [-1, 1] with shape [H, W, 3] or [N, H, W, 3]
         save_path: Path to save the image
     """
+    if image_array.ndim == 4:
+        # Multi-image: [N, H, W, 3] -> create grid
+        num_images = image_array.shape[0]
+        h, w = image_array.shape[1:3]
+
+        # Calculate grid dimensions
+        cols = min(3, num_images)
+        rows = (num_images + cols - 1) // cols
+
+        # Create canvas
+        grid = np.zeros((rows * h, cols * w, 3), dtype=np.float32)
+
+        for i in range(num_images):
+            row = i // cols
+            col = i % cols
+            grid[row*h:(row+1)*h, col*w:(col+1)*w] = image_array[i]
+
+        image_array = grid
+
     # Convert from [-1, 1] to [0, 255]
     img_data = ((image_array + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
     img = Image.fromarray(img_data)
@@ -65,11 +87,15 @@ def evaluate_model(
 
     num_eval = num_examples or config.eval.num_examples
 
+    # Get max_images from config if available
+    max_images = getattr(config.training, 'max_images', 6)
+
     eval_iterator = create_eval_iterator(
         eval_dataset,
         batch_size=config.eval.batch_size,
         prompt_prefix=config.data.prompt_prefix,
         num_examples=num_eval,
+        max_images=max_images,
     )
 
     predictions = []
@@ -98,11 +124,19 @@ def evaluate_model(
 
         # Process when we have a full batch or at the end
         if len(batch_samples) >= config.eval.batch_size:
-            # Create batch dict
+            # Use proper collation for multi-image handling
+            collated = collate_eval_batch(
+                batch_samples,
+                max_images=max_images,
+                image_size=config.model.img_size,
+            )
+
+            # Create batch dict for model (exclude metadata)
             batch_dict = {
-                k: np.stack([s[k] for s in batch_samples])
-                for k in batch_samples[0].keys()
-                if k not in ['sample_id', 'ground_truth', 'input_prompt', 'num_images']
+                'image': collated['image'],
+                'text': collated['text'],
+                'mask_ar': collated['mask_ar'],
+                'mask_input': collated['mask_input'],
             }
             # Add _mask key required by big_vision decode_fn
             batch_dict["_mask"] = np.ones(len(batch_samples), dtype=bool)
@@ -139,10 +173,19 @@ def evaluate_model(
 
     # Process remaining samples if any
     if batch_samples:
+        # Use proper collation for multi-image handling
+        collated = collate_eval_batch(
+            batch_samples,
+            max_images=max_images,
+            image_size=config.model.img_size,
+        )
+
+        # Create batch dict for model (exclude metadata)
         batch_dict = {
-            k: np.stack([s[k] for s in batch_samples])
-            for k in batch_samples[0].keys()
-            if k not in ['sample_id', 'ground_truth', 'input_prompt', 'num_images']
+            'image': collated['image'],
+            'text': collated['text'],
+            'mask_ar': collated['mask_ar'],
+            'mask_input': collated['mask_input'],
         }
         batch_dict["_mask"] = np.ones(len(batch_samples), dtype=bool)
         batch_dict = shard_batch(batch_dict, data_sharding, config)
