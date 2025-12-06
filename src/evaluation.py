@@ -16,40 +16,50 @@ from .data import XVRDataset, create_eval_iterator, postprocess_tokens, collate_
 from .training import create_data_sharding, shard_batch
 
 
-def save_debug_image(image_array: np.ndarray, save_path: str) -> None:
+def save_debug_images(image_array: np.ndarray, sample_id: str, base_dir: str) -> List[str]:
     """
-    Save a preprocessed image array to file for debugging.
+    Save preprocessed images to a sample-specific directory for debugging.
 
-    Handles both single images [H, W, 3] and multi-image [N, H, W, 3].
-    For multi-image, creates a grid layout.
+    Creates directory structure:
+        base_dir/
+            sample_id/
+                img01.png  (Image 1 - first in model input)
+                img02.png  (Image 2)
+                ...
 
     Args:
         image_array: Image in range [-1, 1] with shape [H, W, 3] or [N, H, W, 3]
-        save_path: Path to save the image
+        sample_id: Sample identifier (used as directory name)
+        base_dir: Base directory for all debug images
+
+    Returns:
+        List of saved image paths
     """
+    # Create sample directory
+    sample_dir = os.path.join(base_dir, sample_id)
+    os.makedirs(sample_dir, exist_ok=True)
+
+    saved_paths = []
+
     if image_array.ndim == 4:
-        # Multi-image: [N, H, W, 3] -> create grid
+        # Multi-image: [N, H, W, 3]
         num_images = image_array.shape[0]
-        h, w = image_array.shape[1:3]
-
-        # Calculate grid dimensions
-        cols = min(3, num_images)
-        rows = (num_images + cols - 1) // cols
-
-        # Create canvas
-        grid = np.zeros((rows * h, cols * w, 3), dtype=np.float32)
-
         for i in range(num_images):
-            row = i // cols
-            col = i % cols
-            grid[row*h:(row+1)*h, col*w:(col+1)*w] = image_array[i]
+            img_data = ((image_array[i] + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
+            img = Image.fromarray(img_data)
+            # 1-indexed to match "Image 1", "Image 2" in prompt
+            img_path = os.path.join(sample_dir, f"img{i+1:02d}.png")
+            img.save(img_path)
+            saved_paths.append(img_path)
+    else:
+        # Single image: [H, W, 3]
+        img_data = ((image_array + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
+        img = Image.fromarray(img_data)
+        img_path = os.path.join(sample_dir, "img01.png")
+        img.save(img_path)
+        saved_paths.append(img_path)
 
-        image_array = grid
-
-    # Convert from [-1, 1] to [0, 255]
-    img_data = ((image_array + 1) / 2 * 255).clip(0, 255).astype(np.uint8)
-    img = Image.fromarray(img_data)
-    img.save(save_path)
+    return saved_paths
 
 
 def evaluate_model(
@@ -267,13 +277,18 @@ def evaluate_model(
         for i, sample in enumerate(samples_to_save):
             sample_idx = sample["index"]
             if sample_idx < len(all_images) and all_images[sample_idx] is not None:
-                img_filename = f"sample_{sample['sample_id']}.png"
-                img_path = os.path.join(images_dir, img_filename)
                 try:
-                    save_debug_image(all_images[sample_idx], img_path)
-                    sample["debug_image_path"] = img_path
+                    saved_paths = save_debug_images(
+                        all_images[sample_idx],
+                        sample_id=sample['sample_id'],
+                        base_dir=images_dir,
+                    )
+                    # Store list of individual image paths
+                    sample["debug_image_paths"] = saved_paths
+                    sample["debug_image_count"] = len(saved_paths)
                 except Exception as e:
-                    sample["debug_image_path"] = f"Error saving image: {e}"
+                    sample["debug_image_paths"] = [f"Error saving image: {e}"]
+                    sample["debug_image_count"] = 0
 
         results_data = {
             "summary": {

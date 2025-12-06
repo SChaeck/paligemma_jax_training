@@ -89,9 +89,12 @@ class DataConfig:
     # Image tokens are handled separately by the model:
     #   - 224px image with 14px patches = 16x16 = 256 tokens per image
     #   - 6 images = 1,536 image tokens
-    # Total context = image_tokens + text_tokens
-    # Gemma 2B supports up to 8192 tokens, so 1024 text tokens is safe
-    max_seq_length: int = 1024
+    # XVR dataset analysis:
+    #   - Max text: 1086 chars (~300 tokens)
+    #   - 95th percentile: 959 chars (~280 tokens)
+    #   - Average: 645 chars (~180 tokens)
+    # 512 tokens provides ~1.5x headroom for the longest samples
+    max_seq_length: int = 512
     shuffle_buffer_size: int = 1000
     prompt_prefix: str = "answer en"
 
@@ -204,7 +207,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             valid_file=_get_str("DATA_VALID_FILE", "valid.jsonl"),
             eval_file=_get_str("DATA_EVAL_FILE", "xvr_eval.jsonl"),
             image_dir=_get_str("DATA_IMAGE_DIR", "images"),
-            max_seq_length=_get_int("MAX_SEQ_LENGTH", 1024),
+            max_seq_length=_get_int("MAX_SEQ_LENGTH", 512),
             shuffle_buffer_size=_get_int("SHUFFLE_BUFFER_SIZE", 1000),
             prompt_prefix=_get_str("PROMPT_PREFIX", "answer en"),
             max_train_samples=_get_int("MAX_TRAIN_SAMPLES", None),
