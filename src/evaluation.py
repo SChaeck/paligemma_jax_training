@@ -90,12 +90,9 @@ def evaluate_model(
             tokens = jax.device_get(tokens)
             for i, token_seq in enumerate(tokens):
                 pred_text = postprocess_tokens(token_seq, tokenizer)
-
-                # Remove prefix from prediction
-                if pred_text.startswith(config.data.prompt_prefix):
-                    pred_text = pred_text[len(config.data.prompt_prefix):].strip()
-
-                predictions.append(pred_text)
+                # Note: decode_fn returns only generated tokens, not input prefix
+                # So no prefix removal is needed here
+                predictions.append(pred_text.strip())
                 ground_truths.append(batch_ground_truths[i])
             
             # Reset batch
@@ -124,11 +121,8 @@ def evaluate_model(
         tokens = jax.device_get(tokens)
         for i, token_seq in enumerate(tokens):
             pred_text = postprocess_tokens(token_seq, tokenizer)
-
-            if pred_text.startswith(config.data.prompt_prefix):
-                pred_text = pred_text[len(config.data.prompt_prefix):].strip()
-
-            predictions.append(pred_text)
+            # Note: decode_fn returns only generated tokens, not input prefix
+            predictions.append(pred_text.strip())
             ground_truths.append(batch_ground_truths[i])
 
     # Compute accuracy (exact match)

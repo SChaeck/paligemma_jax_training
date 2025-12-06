@@ -83,7 +83,6 @@ class DataConfig:
 
     max_seq_length: int = 512
     shuffle_buffer_size: int = 1000
-    num_parallel_calls: int = 8
     prompt_prefix: str = "answer en"
 
     max_train_samples: Optional[int] = None
@@ -110,14 +109,12 @@ class EvalConfig:
     num_examples: Optional[int] = None
     batch_size: int = 4
     sampler: str = "greedy"
-    num_beams: int = 4
 
 
 @dataclass
 class SystemConfig:
     """System configuration."""
     xla_mem_fraction: float = 0.9
-    sharding_strategy: str = "fsdp"
     tf_allow_growth: bool = True
     big_vision_path: str = "/home/suchae/pi_workspace/big_vision"
 
@@ -197,7 +194,6 @@ def load_config(env_file: Optional[str] = None) -> Config:
             image_dir=_get_str("DATA_IMAGE_DIR", "images"),
             max_seq_length=_get_int("MAX_SEQ_LENGTH", 512),
             shuffle_buffer_size=_get_int("SHUFFLE_BUFFER_SIZE", 1000),
-            num_parallel_calls=_get_int("NUM_PARALLEL_CALLS", 8),
             prompt_prefix=_get_str("PROMPT_PREFIX", "answer en"),
             max_train_samples=_get_int("MAX_TRAIN_SAMPLES", None),
             max_eval_samples=_get_int("MAX_EVAL_SAMPLES", None),
@@ -218,12 +214,10 @@ def load_config(env_file: Optional[str] = None) -> Config:
             num_examples=_get_int("EVAL_NUM_EXAMPLES", None),
             batch_size=_get_int("EVAL_BATCH_SIZE", 4),
             sampler=_get_str("EVAL_SAMPLER", "greedy"),
-            num_beams=_get_int("EVAL_NUM_BEAMS", 4),
         ),
 
         system=SystemConfig(
             xla_mem_fraction=_get_float("XLA_MEM_FRACTION", 0.9),
-            sharding_strategy=_get_str("SHARDING_STRATEGY", "fsdp"),
             tf_allow_growth=_get_bool("TF_ALLOW_GROWTH", True),
             big_vision_path=_get_str("BIG_VISION_PATH", "/home/suchae/pi_workspace/big_vision"),
         ),
