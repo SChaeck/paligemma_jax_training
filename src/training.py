@@ -17,6 +17,28 @@ import numpy as np
 from .config import Config
 
 
+# =============================================================================
+# Global precision settings - use bfloat16 for speed (matches big_vision/OpenPi)
+# =============================================================================
+def setup_bfloat16():
+    """Enable bfloat16 as default dtype for better performance."""
+    # This affects JAX default operations
+    jax.config.update("jax_default_matmul_precision", "bfloat16")
+
+
+def get_num_devices() -> int:
+    """Get number of available devices (GPUs/TPUs)."""
+    return jax.device_count()
+
+
+def print_device_info():
+    """Print information about available devices."""
+    devices = jax.devices()
+    print(f"JAX devices: {len(devices)}")
+    for i, d in enumerate(devices):
+        print(f"  [{i}] {d.platform}: {d.device_kind}")
+
+
 def setup_big_vision(config: Config):
     """Add big_vision to path if needed."""
     if config.system.big_vision_path not in sys.path:
@@ -142,16 +164,15 @@ def compiled_train_step(
     return params, loss
 
 
+@functools.partial(jax.jit, static_argnames=('model',))
 def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float, Dict]:
     """
-    Compute loss and gradients for a single batch (for gradient accumulation).
-
-    This is NOT JIT compiled so it can be called in a Python loop for accumulation.
+    JIT-compiled loss and gradient computation for gradient accumulation.
 
     Args:
         params: Model parameters
         batch: Training batch
-        model: PaliGemma model
+        model: PaliGemma model (static)
 
     Returns:
         Tuple of (loss, gradients)
@@ -183,6 +204,113 @@ def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float
     return loss, grads
 
 
+# =============================================================================
+# Multi-GPU (pmap) training step
+# =============================================================================
+def create_pmap_train_step(model: Any):
+    """
+    Create a pmap-based training step for multi-GPU training.
+
+    This function creates a parallelized training step that:
+    1. Runs forward/backward pass on each device
+    2. Averages gradients across devices using pmean
+    3. Applies the same update on all devices
+
+    Args:
+        model: PaliGemma model (will be static in the returned function)
+
+    Returns:
+        pmap'd training step function
+    """
+    def train_step(params, batch, trainable_mask, learning_rate, max_grad_norm):
+        """Single device training step (to be pmap'd)."""
+        imgs = batch["image"]
+        txts = batch["text"]
+        mask_ar = batch["mask_ar"]
+
+        def loss_fn(params):
+            text_logits, _ = model.apply(
+                {"params": params},
+                imgs,
+                txts[:, :-1],
+                mask_ar[:, :-1],
+                train=True
+            )
+
+            logp = jax.nn.log_softmax(text_logits, axis=-1)
+            mask_loss = batch["mask_loss"][:, 1:]
+            targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
+
+            token_pplx = jnp.sum(logp * targets, axis=-1)
+            example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
+            example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+
+            return jnp.mean(example_loss)
+
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+
+        # Average gradients across devices
+        grads = jax.lax.pmean(grads, axis_name="batch")
+        loss = jax.lax.pmean(loss, axis_name="batch")
+
+        # Apply gradient clipping
+        grad_norm = jnp.sqrt(sum(
+            jnp.sum(jnp.square(g)) for g in jax.tree.leaves(grads)
+        ))
+        clip_factor = jnp.where(
+            max_grad_norm > 0,
+            jnp.clip(max_grad_norm / (grad_norm + 1e-8), a_max=1.0),
+            1.0
+        )
+        grads = jax.tree.map(lambda g: g * clip_factor, grads)
+
+        def apply_grad(param, gradient, trainable):
+            return jnp.where(trainable, param - learning_rate * gradient, param)
+
+        params = jax.tree.map(apply_grad, params, grads, trainable_mask)
+
+        return params, loss
+
+    # Create pmap'd version
+    return jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
+
+
+def replicate_params(params: Dict) -> Dict:
+    """Replicate parameters across all devices for pmap."""
+    return jax.device_put_replicated(params, jax.devices())
+
+
+def unreplicate_params(params: Dict) -> Dict:
+    """Get parameters from first device (all devices have same params after pmap)."""
+    return jax.tree.map(lambda x: x[0], params)
+
+
+def shard_batch_for_pmap(batch: Dict, num_devices: int) -> Dict:
+    """
+    Reshape batch for pmap: [batch_size, ...] -> [num_devices, batch_per_device, ...]
+
+    Args:
+        batch: Batch dictionary with arrays
+        num_devices: Number of devices
+
+    Returns:
+        Reshaped batch for pmap
+    """
+    def reshape_array(x):
+        if not isinstance(x, (np.ndarray, jnp.ndarray)):
+            return x
+        batch_size = x.shape[0]
+        if batch_size % num_devices != 0:
+            raise ValueError(
+                f"Batch size {batch_size} must be divisible by num_devices {num_devices}"
+            )
+        new_shape = (num_devices, batch_size // num_devices) + x.shape[1:]
+        return x.reshape(new_shape)
+
+    return jax.tree.map(reshape_array, batch)
+
+
+@jax.jit
 def apply_gradients(
     params: Dict,
     grads: Dict,
@@ -191,7 +319,7 @@ def apply_gradients(
     max_grad_norm: float = 1.0,
 ) -> Dict:
     """
-    Apply gradients to parameters with clipping.
+    JIT-compiled gradient application with clipping.
 
     Args:
         params: Model parameters

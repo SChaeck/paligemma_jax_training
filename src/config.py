@@ -71,9 +71,11 @@ class TrainingConfig:
     warmup_percent: float = 0.10
     lr_schedule: str = "cosine"  # "cosine", "constant", "linear"
     max_grad_norm: float = 1.0
-    precision: str = "float32"  # "float32", "bfloat16", "float16"
+    precision: str = "bfloat16"  # "float32", "bfloat16" - bfloat16 is faster on TPU/GPU
     seed: int = 42
     max_images: int = 6  # Maximum number of images per sample
+    prefetch_batches: int = 2  # Number of batches to prefetch for async data loading
+    use_pmap: bool = True  # Use pmap for multi-GPU training (auto-detected)
 
 
 @dataclass
@@ -196,9 +198,11 @@ def load_config(env_file: Optional[str] = None) -> Config:
             warmup_percent=_get_float("WARMUP_PERCENT", 0.10),
             lr_schedule=_get_str("LR_SCHEDULE", "cosine"),
             max_grad_norm=_get_float("MAX_GRAD_NORM", 1.0),
-            precision=_get_str("PRECISION", "float32"),
+            precision=_get_str("PRECISION", "bfloat16"),
             seed=_get_int("SEED", 42),
             max_images=_get_int("MAX_IMAGES", 6),
+            prefetch_batches=_get_int("PREFETCH_BATCHES", 2),
+            use_pmap=_get_bool("USE_PMAP", True),
         ),
 
         data=DataConfig(

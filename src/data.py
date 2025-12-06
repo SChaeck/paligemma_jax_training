@@ -7,8 +7,10 @@ images and text for PaliGemma training.
 
 import json
 import os
+import queue
+import threading
 from pathlib import Path
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -731,3 +733,69 @@ def create_eval_iterator(
         }
 
         count += 1
+
+
+class PrefetchIterator:
+    """
+    Wraps an iterator to prefetch items in a background thread.
+    This allows data loading to happen in parallel with GPU computation.
+    """
+
+    def __init__(self, iterator: Iterator, prefetch_size: int = 2):
+        """
+        Args:
+            iterator: Source iterator to prefetch from
+            prefetch_size: Number of items to prefetch (default: 2)
+        """
+        self.iterator = iterator
+        self.prefetch_size = prefetch_size
+        self.queue = queue.Queue(maxsize=prefetch_size)
+        self.stop_event = threading.Event()
+        self.thread = threading.Thread(target=self._prefetch_worker, daemon=True)
+        self.thread.start()
+
+    def _prefetch_worker(self):
+        """Background thread that prefetches items into the queue."""
+        try:
+            for item in self.iterator:
+                if self.stop_event.is_set():
+                    break
+                self.queue.put(item)
+            # Signal end of iterator
+            self.queue.put(None)
+        except Exception as e:
+            self.queue.put(e)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        item = self.queue.get()
+        if item is None:
+            raise StopIteration
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    def stop(self):
+        """Stop the prefetch thread."""
+        self.stop_event.set()
+
+
+def prefetch_iterator(iterator: Iterator, prefetch_size: int = 2) -> Iterator:
+    """
+    Wrap an iterator to prefetch items in background.
+
+    Usage:
+        train_iter = prefetch_iterator(create_train_iterator(...), prefetch_size=2)
+        for batch in train_iter:
+            ...
+
+    Args:
+        iterator: Source iterator
+        prefetch_size: Number of items to prefetch
+
+    Returns:
+        Iterator that prefetches in background
+    """
+    return PrefetchIterator(iterator, prefetch_size)

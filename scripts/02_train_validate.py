@@ -44,7 +44,7 @@ from src.model import (
     prepare_params_for_training,
     save_checkpoint,
 )
-from src.data import XVRDataset, create_train_iterator, collate_batch
+from src.data import XVRDataset, create_train_iterator, collate_batch, prefetch_iterator
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
@@ -52,6 +52,16 @@ from src.training import (
     MetricsTracker,
     create_data_sharding,
     shard_batch,
+    # Multi-GPU support
+    setup_bfloat16,
+    print_device_info,
+    get_num_devices,
+    create_pmap_train_step,
+    replicate_params,
+    unreplicate_params,
+    shard_batch_for_pmap,
+    compute_loss_and_grads,
+    apply_gradients,
 )
 from src.evaluation import evaluate_model
 
@@ -74,9 +84,9 @@ def setup_environment(config):
     rng_key = jax.random.PRNGKey(config.training.seed)
     print(f"Random seed:  {config.training.seed}")
 
-    # Set precision
+    # Set precision - bfloat16 for speed (matches big_vision/OpenPi)
     if config.training.precision == "bfloat16":
-        jax.config.update("jax_default_matmul_precision", "bfloat16")
+        setup_bfloat16()
         print(f"Precision:    bfloat16")
     elif config.training.precision == "float16":
         jax.config.update("jax_default_matmul_precision", "float16")
@@ -86,9 +96,8 @@ def setup_environment(config):
         print(f"Precision:    float32")
 
     print(f"JAX version:  {jax.__version__}")
-    print(f"JAX devices:  {jax.device_count()}")
-    print(f"Device list:  {jax.devices()}\n")
-    
+    print_device_info()
+
     return rng_key
 
 
@@ -355,8 +364,27 @@ def train_with_validation(config):
         config=config,
     )
 
-    data_sharding = create_data_sharding(config)
     metrics_tracker = MetricsTracker()
+
+    # ==========================================================================
+    # Multi-GPU Setup
+    # ==========================================================================
+    num_devices = get_num_devices()
+    use_pmap = config.training.use_pmap and num_devices > 1
+
+    if use_pmap:
+        print(f"\n[Multi-GPU] Using pmap with {num_devices} devices")
+        print(f"[Multi-GPU] Effective batch size per step: {config.training.batch_size} (split across {num_devices} GPUs)")
+
+        # Create pmap training step
+        pmap_train_step = create_pmap_train_step(model)
+
+        # Replicate params and mask across devices
+        params = replicate_params(params)
+        trainable_mask = replicate_params(trainable_mask)
+    else:
+        print(f"\n[Single-GPU] Using jit compiled training")
+        data_sharding = create_data_sharding(config)
 
     # Track curves
     curves = {
@@ -395,41 +423,68 @@ def train_with_validation(config):
                 max_images=config.training.max_images,
                 image_size=config.model.img_size,
             )
-            batch = shard_batch(batch, data_sharding, config)
 
-            if accum_steps == 1:
-                # No accumulation - use simple train step
-                lr = lr_schedule(step)
-                params, loss = compiled_train_step(
-                    params,
-                    batch,
-                    model,
-                    trainable_mask,
-                    lr,
-                    max_grad_norm=config.training.max_grad_norm,
-                )
-                accumulated_loss = loss
-            else:
-                # Accumulate gradients manually
-                from src.training import compute_loss_and_grads
-                loss, grads = compute_loss_and_grads(params, batch, model)
-                accumulated_loss += loss
+            if use_pmap:
+                # Reshape for pmap: [batch, ...] -> [devices, batch/devices, ...]
+                batch = shard_batch_for_pmap(batch, num_devices)
 
-                if accumulated_grads is None:
-                    accumulated_grads = grads
+                if accum_steps == 1:
+                    lr = lr_schedule(step)
+                    # Replicate scalar values for pmap
+                    lr_replicated = jnp.array([lr] * num_devices)
+                    max_grad_norm_replicated = jnp.array([config.training.max_grad_norm] * num_devices)
+
+                    params, loss = pmap_train_step(
+                        params, batch, trainable_mask, lr_replicated, max_grad_norm_replicated
+                    )
+                    # Loss is same on all devices, take first
+                    accumulated_loss = loss[0]
                 else:
-                    accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+                    # For gradient accumulation with pmap, we need to handle differently
+                    # Fall back to single-device accumulation
+                    loss, grads = compute_loss_and_grads(unreplicate_params(params), batch, model)
+                    accumulated_loss += loss
+                    if accumulated_grads is None:
+                        accumulated_grads = grads
+                    else:
+                        accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+            else:
+                # Single GPU path
+                batch = shard_batch(batch, data_sharding, config)
 
-        # Apply accumulated gradients
+                if accum_steps == 1:
+                    lr = lr_schedule(step)
+                    params, loss = compiled_train_step(
+                        params,
+                        batch,
+                        model,
+                        trainable_mask,
+                        lr,
+                        max_grad_norm=config.training.max_grad_norm,
+                    )
+                    accumulated_loss = loss
+                else:
+                    loss, grads = compute_loss_and_grads(params, batch, model)
+                    accumulated_loss += loss
+                    if accumulated_grads is None:
+                        accumulated_grads = grads
+                    else:
+                        accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+
+        # Apply accumulated gradients (only when accum_steps > 1)
         if accum_steps > 1:
             lr = lr_schedule(step)
-            # Average gradients
             accumulated_grads = jax.tree.map(lambda g: g / accum_steps, accumulated_grads)
             accumulated_loss = accumulated_loss / accum_steps
 
-            # Apply gradient clipping and update
-            from src.training import apply_gradients
-            params = apply_gradients(params, accumulated_grads, trainable_mask, lr, config.training.max_grad_norm)
+            if use_pmap:
+                # For pmap with accumulation, update the unreplicated params then re-replicate
+                single_params = unreplicate_params(params)
+                single_mask = unreplicate_params(trainable_mask)
+                single_params = apply_gradients(single_params, accumulated_grads, single_mask, lr, config.training.max_grad_norm)
+                params = replicate_params(single_params)
+            else:
+                params = apply_gradients(params, accumulated_grads, trainable_mask, lr, config.training.max_grad_norm)
             loss = accumulated_loss
 
         loss = float(jax.device_get(loss))
@@ -469,8 +524,10 @@ def train_with_validation(config):
         # Validation
         if step % config.logging.eval_every == 0:
             print("\n  Running validation...")
+            # For pmap, unreplicate params before evaluation
+            eval_params = unreplicate_params(params) if use_pmap else params
             valid_metrics = evaluate_model(
-                model, params, decode_fn, tokenizer,
+                model, eval_params, decode_fn, tokenizer,
                 valid_dataset, config,
                 num_examples=config.eval.num_examples,
                 verbose=False,
@@ -488,9 +545,10 @@ def train_with_validation(config):
                 curves["best_step"] = step
                 print(f"  New best accuracy!")
 
-                # Save best checkpoint
+                # Save best checkpoint (unreplicate for saving)
+                save_params = unreplicate_params(params) if use_pmap else params
                 save_checkpoint(
-                    params,
+                    save_params,
                     step,
                     os.path.join(config.checkpoint_dir, "best"),
                     config,
@@ -507,8 +565,9 @@ def train_with_validation(config):
 
         # Save checkpoint
         if step % config.logging.checkpoint_every == 0:
+            save_params = unreplicate_params(params) if use_pmap else params
             save_checkpoint(
-                params,
+                save_params,
                 step,
                 config.checkpoint_dir,
                 config,
@@ -536,11 +595,14 @@ def train_with_validation(config):
     # ==========================================================================
     print_banner("Step 5: Final Evaluation")
 
+    # For pmap, unreplicate params for final evaluation and saving
+    final_params = unreplicate_params(params) if use_pmap else params
+
     # Save debug results for final evaluation
     final_results_path = os.path.join(config.checkpoint_dir, "final_eval_results.json")
 
     final_metrics = evaluate_model(
-        model, params, decode_fn, tokenizer,
+        model, final_params, decode_fn, tokenizer,
         valid_dataset, config,
         num_examples=None,
         verbose=True,
@@ -554,7 +616,7 @@ def train_with_validation(config):
     print_banner("Step 6: Saving Final Model")
 
     save_checkpoint(
-        params,
+        final_params,
         total_steps,
         config.checkpoint_dir,
         config,
