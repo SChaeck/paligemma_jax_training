@@ -137,6 +137,7 @@ def main():
         tokenizer=tokenizer,
         max_seq_length=config.data.max_seq_length,
         image_size=config.model.img_size,
+        shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
     print(f"  Evaluation split: {args.split}")

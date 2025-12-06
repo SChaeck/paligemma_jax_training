@@ -132,6 +132,7 @@ def run_overfit_test(config):
         max_seq_length=config.data.max_seq_length,
         image_size=config.model.img_size,
         max_samples=config.data.max_train_samples,
+        shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
     # For overfit test, use same data for train and eval
@@ -142,6 +143,7 @@ def run_overfit_test(config):
         max_seq_length=config.data.max_seq_length,
         image_size=config.model.img_size,
         max_samples=config.data.max_train_samples,
+        shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
     print(f"  Training samples: {train_dataset.num_samples}")

@@ -309,6 +309,7 @@ def train_with_validation(config):
         max_seq_length=config.data.max_seq_length,
         image_size=config.model.img_size,
         max_samples=config.data.max_train_samples,
+        shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
     valid_dataset = XVRDataset(
@@ -318,6 +319,7 @@ def train_with_validation(config):
         max_seq_length=config.data.max_seq_length,
         image_size=config.model.img_size,
         max_samples=config.data.max_eval_samples,
+        shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
     print(f"  Training samples: {train_dataset.num_samples}")
