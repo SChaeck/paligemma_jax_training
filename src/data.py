@@ -33,6 +33,7 @@ class XVRDataset:
         max_seq_length: int = 512,
         image_size: int = 224,
         max_samples: Optional[int] = None,
+        shuffle_buffer_size: int = 1000,
     ):
         """
         Initialize XVR dataset loader.
@@ -44,6 +45,7 @@ class XVRDataset:
             max_seq_length: Maximum sequence length for text
             image_size: Image size (height and width)
             max_samples: Maximum number of samples to use (None = all)
+            shuffle_buffer_size: Buffer size for shuffling
         """
         self.jsonl_path = jsonl_path
         self.image_base_dir = Path(image_base_dir)
@@ -51,6 +53,7 @@ class XVRDataset:
         self.max_seq_length = max_seq_length
         self.image_size = image_size
         self.max_samples = max_samples
+        self.shuffle_buffer_size = shuffle_buffer_size
 
         # Load and validate dataset
         self._validate_paths()
@@ -144,7 +147,7 @@ class XVRDataset:
             dataset = dataset.take(self.max_samples)
 
         if shuffle:
-            dataset = dataset.shuffle(buffer_size=min(1000, self.num_samples))
+            dataset = dataset.shuffle(buffer_size=min(self.shuffle_buffer_size, self.num_samples))
 
         if repeat:
             dataset = dataset.repeat()
