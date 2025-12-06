@@ -142,6 +142,85 @@ def compiled_train_step(
     return params, loss
 
 
+def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float, Dict]:
+    """
+    Compute loss and gradients for a single batch (for gradient accumulation).
+
+    This is NOT JIT compiled so it can be called in a Python loop for accumulation.
+
+    Args:
+        params: Model parameters
+        batch: Training batch
+        model: PaliGemma model
+
+    Returns:
+        Tuple of (loss, gradients)
+    """
+    imgs = batch["image"]
+    txts = batch["text"]
+    mask_ar = batch["mask_ar"]
+
+    def loss_fn(params):
+        text_logits, _ = model.apply(
+            {"params": params},
+            imgs,
+            txts[:, :-1],
+            mask_ar[:, :-1],
+            train=True
+        )
+
+        logp = jax.nn.log_softmax(text_logits, axis=-1)
+        mask_loss = batch["mask_loss"][:, 1:]
+        targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
+
+        token_pplx = jnp.sum(logp * targets, axis=-1)
+        example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
+        example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+
+        return jnp.mean(example_loss)
+
+    loss, grads = jax.value_and_grad(loss_fn)(params)
+    return loss, grads
+
+
+def apply_gradients(
+    params: Dict,
+    grads: Dict,
+    trainable_mask: Dict,
+    learning_rate: float,
+    max_grad_norm: float = 1.0,
+) -> Dict:
+    """
+    Apply gradients to parameters with clipping.
+
+    Args:
+        params: Model parameters
+        grads: Gradients (already accumulated and averaged)
+        trainable_mask: Mask of trainable parameters
+        learning_rate: Learning rate
+        max_grad_norm: Maximum gradient norm for clipping
+
+    Returns:
+        Updated parameters
+    """
+    # Apply gradient clipping
+    grad_norm = jnp.sqrt(sum(
+        jnp.sum(jnp.square(g)) for g in jax.tree.leaves(grads)
+    ))
+    clip_factor = jnp.where(
+        max_grad_norm > 0,
+        jnp.clip(max_grad_norm / (grad_norm + 1e-8), a_max=1.0),
+        1.0
+    )
+    grads = jax.tree.map(lambda g: g * clip_factor, grads)
+
+    def apply_grad(param, gradient, trainable):
+        return jnp.where(trainable, param - learning_rate * gradient, param)
+
+    params = jax.tree.map(apply_grad, params, grads, trainable_mask)
+    return params
+
+
 @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=('model',))
 def compiled_train_step_with_accumulation(
     params: Dict,

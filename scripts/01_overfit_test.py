@@ -197,32 +197,59 @@ def run_overfit_test(config):
     print("  - Accuracy on training data should approach 100%\n")
 
     start_time = time.time()
+    accum_steps = config.training.gradient_accumulation_steps
 
     for step in range(1, total_steps + 1):
         step_start = time.time()
 
-        # Get batch - collect batch_size samples and use proper collation
-        # This handles variable number of images per sample correctly
-        batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
-        batch = collate_batch(
-            batch_samples,
-            max_images=config.training.max_images,
-            image_size=config.model.img_size,
-        )
-        batch = shard_batch(batch, data_sharding, config)
+        # Gradient accumulation: collect multiple batches
+        accumulated_loss = 0.0
+        accumulated_grads = None
 
-        # Get learning rate
-        lr = lr_schedule(step)
+        for accum_idx in range(accum_steps):
+            # Get batch - collect batch_size samples and use proper collation
+            batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
+            batch = collate_batch(
+                batch_samples,
+                max_images=config.training.max_images,
+                image_size=config.model.img_size,
+            )
+            batch = shard_batch(batch, data_sharding, config)
 
-        # Training step
-        params, loss = compiled_train_step(
-            params,
-            batch,
-            model,
-            trainable_mask,
-            lr,
-            max_grad_norm=config.training.max_grad_norm,
-        )
+            if accum_steps == 1:
+                # No accumulation - use simple train step
+                lr = lr_schedule(step)
+                params, loss = compiled_train_step(
+                    params,
+                    batch,
+                    model,
+                    trainable_mask,
+                    lr,
+                    max_grad_norm=config.training.max_grad_norm,
+                )
+                accumulated_loss = loss
+            else:
+                # Accumulate gradients manually
+                from src.training import compute_loss_and_grads
+                loss, grads = compute_loss_and_grads(params, batch, model)
+                accumulated_loss += loss
+
+                if accumulated_grads is None:
+                    accumulated_grads = grads
+                else:
+                    accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+
+        # Apply accumulated gradients
+        if accum_steps > 1:
+            lr = lr_schedule(step)
+            # Average gradients
+            accumulated_grads = jax.tree.map(lambda g: g / accum_steps, accumulated_grads)
+            accumulated_loss = accumulated_loss / accum_steps
+
+            # Apply gradient clipping and update
+            from src.training import apply_gradients
+            params = apply_gradients(params, accumulated_grads, trainable_mask, lr, config.training.max_grad_norm)
+            loss = accumulated_loss
 
         loss = jax.device_get(loss)
         step_time = time.time() - step_start
