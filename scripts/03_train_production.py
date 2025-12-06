@@ -470,11 +470,19 @@ def train_production(config):
 
         # Validation
         if step % config.logging.eval_every == 0:
+            # Save validation results for debugging
+            val_results_path = os.path.join(
+                config.checkpoint_dir, 
+                f"validation_results_step_{step:06d}.json"
+            )
+            
             valid_metrics = evaluate_model(
                 model, params, decode_fn, tokenizer,
                 valid_dataset, config,
                 num_examples=config.eval.num_examples,
                 verbose=False,
+                save_results_path=val_results_path,
+                max_saved_samples=100,
             )
 
             accuracy = valid_metrics['accuracy']

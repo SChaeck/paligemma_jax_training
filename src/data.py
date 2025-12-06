@@ -406,7 +406,7 @@ def preprocess_tokens(
     - Suffix text uses causal attention (mask_ar=1) and IS trained (mask_loss=1)
 
     Args:
-        prefix: Prefix text (e.g., "answer en What is this?")
+        prefix: Prefix text (empty by default, can include instructions like "answer en")
         suffix: Suffix text (e.g., the answer)
         seqlen: Maximum sequence length for TEXT only (will pad if needed)
         tokenizer: SentencePiece tokenizer
@@ -587,7 +587,7 @@ def postprocess_tokens(tokens: np.ndarray, tokenizer) -> str:
 def create_train_iterator(
     dataset: XVRDataset,
     batch_size: int,
-    prompt_prefix: str = "answer en",
+    prompt_prefix: str = "",  # Empty by default (matching Google's official tutorial)
     max_images: int = 6,
 ) -> Iterator[Dict[str, np.ndarray]]:
     """
@@ -596,7 +596,7 @@ def create_train_iterator(
     Args:
         dataset: XVRDataset instance
         batch_size: Number of examples per batch
-        prompt_prefix: Prefix for all prompts (e.g., "answer en")
+        prompt_prefix: Prefix for all prompts (empty by default, can be set to "answer en" etc.)
         max_images: Maximum number of images per sample
 
     Yields:
@@ -628,9 +628,12 @@ def create_train_iterator(
             print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
             continue
 
-        # Include the actual prompt/question in the prefix
-        # Format: "{prompt_prefix} {actual_question}"
-        full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        # Combine prompt_prefix (if any) with the actual question
+        # Format: "{prompt_prefix}{actual_question}" (with space if prefix exists)
+        if prompt_prefix:
+            full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        else:
+            full_prefix = sample['prompt']
 
         suffix = sample['answer'].lower()
         tokens, mask_ar, mask_loss, _ = preprocess_tokens(
@@ -654,7 +657,7 @@ def create_train_iterator(
 def create_eval_iterator(
     dataset: XVRDataset,
     batch_size: int,
-    prompt_prefix: str = "answer en",
+    prompt_prefix: str = "",  # Empty by default (matching Google's official tutorial)
     num_examples: Optional[int] = None,
     max_images: int = 6,
 ) -> Iterator[Dict[str, np.ndarray]]:
@@ -664,7 +667,7 @@ def create_eval_iterator(
     Args:
         dataset: XVRDataset instance
         batch_size: Number of examples per batch
-        prompt_prefix: Prefix for all prompts (e.g., "answer en")
+        prompt_prefix: Prefix for all prompts (empty by default, can be set to "answer en" etc.)
         num_examples: Maximum number of examples to yield (None = all)
         max_images: Maximum number of images per sample
 
@@ -700,9 +703,12 @@ def create_eval_iterator(
             print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
             continue
 
-        # Include the actual prompt/question in the prefix
-        # Format: "{prompt_prefix} {actual_question}"
-        full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        # Combine prompt_prefix (if any) with the actual question
+        # Format: "{prompt_prefix}{actual_question}" (with space if prefix exists)
+        if prompt_prefix:
+            full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        else:
+            full_prefix = sample['prompt']
 
         tokens, mask_ar, _, mask_input = preprocess_tokens(
             prefix=full_prefix,

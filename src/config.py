@@ -96,7 +96,7 @@ class DataConfig:
     # 512 tokens provides ~1.5x headroom for the longest samples
     max_seq_length: int = 512
     shuffle_buffer_size: int = 1000
-    prompt_prefix: str = "answer en"
+    prompt_prefix: str = ""  # Empty by default (matching Google's official tutorial)
 
     max_train_samples: Optional[int] = None
     max_eval_samples: Optional[int] = None
@@ -209,7 +209,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             image_dir=_get_str("DATA_IMAGE_DIR", "images"),
             max_seq_length=_get_int("MAX_SEQ_LENGTH", 512),
             shuffle_buffer_size=_get_int("SHUFFLE_BUFFER_SIZE", 1000),
-            prompt_prefix=_get_str("PROMPT_PREFIX", "answer en"),
+            prompt_prefix=_get_str("PROMPT_PREFIX", ""),  # Empty by default
             max_train_samples=_get_int("MAX_TRAIN_SAMPLES", None),
             max_eval_samples=_get_int("MAX_EVAL_SAMPLES", None),
         ),
