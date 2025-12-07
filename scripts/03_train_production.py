@@ -17,6 +17,7 @@ import json
 import argparse
 from pathlib import Path
 from datetime import datetime
+from typing import Dict, Any
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -24,6 +25,15 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Suppress TensorFlow warnings before importing
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# Optional: Force single GPU mode if CUDA_VISIBLE_DEVICES is not already set
+# This can be useful to avoid NCCL/sharding issues, but prevents multi-GPU training
+# To use multi-GPU: either don't set this env var, or set it to multiple GPUs (e.g., '0,1,2,3')
+if 'CUDA_VISIBLE_DEVICES' not in os.environ:
+    # Default behavior: use all available GPUs
+    # To force single GPU, uncomment the line below:
+    # os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    pass
 
 import jax
 import jax.numpy as jnp
@@ -51,6 +61,14 @@ from src.training import (
     MetricsTracker,
     create_data_sharding,
     shard_batch,
+    # Multi-GPU support
+    setup_bfloat16,
+    print_device_info,
+    get_num_devices,
+    create_pmap_train_step_adam,
+    replicate_params,
+    unreplicate_params,
+    shard_batch_for_pmap,
 )
 from src.evaluation import evaluate_model
 
@@ -60,6 +78,94 @@ def print_banner(text: str):
     print("\n" + "=" * 80)
     print(text)
     print("=" * 80 + "\n")
+
+
+def save_training_batch(
+    batch: Dict,
+    batch_samples: list,
+    step: int,
+    loss: float,
+    decode_fn: Any,
+    tokenizer: Any,
+    output_dir: str,
+    max_samples: int = 4,
+):
+    """
+    Save training batch samples for debugging - EXACTLY like validation does it.
+
+    Simply saves the original text from batch_samples (input_prompt and ground_truth).
+    """
+    import PIL.Image
+
+    # Create output directory
+    batch_dir = os.path.join(output_dir, f"train_batch_step_{step:06d}")
+    os.makedirs(batch_dir, exist_ok=True)
+    images_dir = os.path.join(batch_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+
+    # Unshard batch if needed
+    if batch['image'].ndim == 6:  # Sharded for pmap
+        batch_images = np.array(batch['image'][0])
+    else:
+        batch_images = np.array(batch['image'])
+
+    # Limit to max_samples
+    num_samples = min(len(batch_images), max_samples, len(batch_samples))
+
+    samples_info = []
+
+    for i in range(num_samples):
+        # Get sample metadata - THIS IS THE KEY! Just like validation does it
+        sample = batch_samples[i]
+        sample_id = sample.get('sample_id', f'sample_{i}')
+        input_prompt = sample.get('input_prompt', '')
+        ground_truth = sample.get('ground_truth', '')
+        num_images = sample.get('num_images', 0)
+
+        sample_info = {
+            "index": i,
+            "sample_id": sample_id,
+            "input_prompt": input_prompt,  # Original text - NOT decoded!
+            "ground_truth": ground_truth,  # Original answer - NOT decoded!
+            "num_images": num_images,
+            "step": step,
+            "loss": float(loss),
+        }
+
+        # Save images
+        images = batch_images[i]
+        image_paths = []
+        for img_idx in range(num_images):
+            img = images[img_idx]
+
+            # Convert to [0, 255]
+            if img.min() < 0:
+                img = ((img + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+            elif img.max() <= 1.0:
+                img = (img * 255).clip(0, 255).astype(np.uint8)
+            else:
+                img = img.clip(0, 255).astype(np.uint8)
+
+            img_path = os.path.join(images_dir, f"sample_{i:02d}_image_{img_idx}.png")
+            PIL.Image.fromarray(img).save(img_path)
+            image_paths.append(f"images/sample_{i:02d}_image_{img_idx}.png")
+
+        sample_info["image_paths"] = image_paths
+        samples_info.append(sample_info)
+
+    # Save JSON summary - simple format like validation
+    summary = {
+        "step": step,
+        "loss": float(loss),
+        "num_samples_saved": num_samples,
+        "samples": samples_info,
+    }
+
+    summary_path = os.path.join(batch_dir, "batch_info.json")
+    with open(summary_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    print(f"  Saved training batch to: {batch_dir}")
 
 
 def setup_environment(config):
@@ -73,9 +179,9 @@ def setup_environment(config):
     rng_key = jax.random.PRNGKey(config.training.seed)
     print(f"Random seed:  {config.training.seed}")
 
-    # Set precision
+    # Set precision - use setup_bfloat16 for bfloat16 (matches big_vision/OpenPi)
     if config.training.precision == "bfloat16":
-        jax.config.update("jax_default_matmul_precision", "bfloat16")
+        setup_bfloat16()
         print(f"Precision:    bfloat16")
     elif config.training.precision == "float16":
         jax.config.update("jax_default_matmul_precision", "float16")
@@ -85,8 +191,7 @@ def setup_environment(config):
         print(f"Precision:    float32")
 
     print(f"JAX version:  {jax.__version__}")
-    print(f"JAX devices:  {jax.device_count()}")
-    print(f"Device list:  {jax.devices()}\n")
+    print_device_info()
     
     return rng_key
 
@@ -374,8 +479,6 @@ def train_production(config):
         weight_decay=0.0,  # No weight decay for fine-tuning
         max_grad_norm=config.training.max_grad_norm,
     )
-    opt_state = create_optimizer_state(optimizer, params)
-    print(f"  Optimizer state initialized")
 
     # Keep lr_schedule for logging purposes only
     lr_schedule = create_learning_rate_schedule(
@@ -386,11 +489,49 @@ def train_production(config):
         config=config,
     )
 
-    data_sharding = create_data_sharding(config)
     metrics_tracker = MetricsTracker()
 
     best_accuracy = 0.0
     best_step = 0
+
+    # ==========================================================================
+    # Multi-GPU Setup
+    # ==========================================================================
+    num_devices = get_num_devices()
+    use_pmap = config.training.use_pmap and num_devices > 1
+
+    if use_pmap:
+        print(f"\n[Multi-GPU] Using pmap with {num_devices} devices")
+        print(f"[Multi-GPU] Effective batch size per step: {config.training.batch_size} (split across {num_devices} GPUs)")
+
+        # For pmap, params must be on CPU before replication
+        # Initialize optimizer state on CPU
+        opt_state = create_optimizer_state(optimizer, params)
+        print(f"  Optimizer state initialized on CPU")
+
+        # Create pmap training step with Adam optimizer
+        pmap_train_step = create_pmap_train_step_adam(model, optimizer)
+
+        # Replicate params, opt_state, and mask across devices
+        print(f"  Replicating params across {num_devices} devices...")
+        params = replicate_params(params)
+        opt_state = replicate_params(opt_state)
+        trainable_mask = replicate_params(trainable_mask)
+        print(f"  Replication complete")
+    else:
+        print(f"\n[Single-GPU] Using jit compiled training with Adam optimizer")
+
+        # Move params to single GPU (avoid device mismatch)
+        first_device = jax.devices()[0]
+        params = jax.device_put(params, first_device)
+        trainable_mask = jax.device_put(trainable_mask, first_device)
+        print(f"  Moved params to single GPU: {first_device}")
+
+        # Initialize optimizer state after moving params
+        opt_state = create_optimizer_state(optimizer, params)
+        print(f"  Optimizer state initialized")
+
+        data_sharding = create_data_sharding(config)
 
     # ==========================================================================
     # Training Loop
@@ -416,8 +557,13 @@ def train_production(config):
             max_images=config.training.max_images,
             image_size=config.model.img_size,
         )
-        batch = shard_batch(batch, data_sharding, config)
-        
+
+        # Shard batch based on single/multi GPU mode
+        if use_pmap:
+            batch = shard_batch_for_pmap(batch, num_devices)
+        else:
+            batch = shard_batch(batch, data_sharding, config)
+
         accum_batches.append(batch)
 
         # Only update when we have accumulated enough batches
@@ -428,35 +574,70 @@ def train_production(config):
             # Get learning rate for logging (optimizer handles schedule internally)
             lr = lr_schedule(effective_step)
 
+            # Save training batch BEFORE training (every log_every steps)
+            # This shows exactly what the model sees as input
+            if step % config.logging.log_every == 0:
+                try:
+                    save_training_batch(
+                        batch=accum_batches[0],  # Save first accumulated batch
+                        batch_samples=batch_samples,  # Original samples with metadata
+                        step=step,
+                        loss=0.0,  # Will be updated after training
+                        decode_fn=decode_fn,
+                        tokenizer=tokenizer,
+                        output_dir=config.checkpoint_dir,
+                        max_samples=4,
+                    )
+                except Exception as e:
+                    print(f"  Warning: Failed to save training batch: {e}")
+
             # Training step with Adam optimizer
-            if accum_steps > 1 and len(accum_batches) > 1:
-                # Gradient accumulation with Adam
-                accumulated_grads = None
-                accumulated_loss = 0.0
-
-                for batch in accum_batches:
-                    loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
-                    accumulated_loss += loss
-                    if accumulated_grads is None:
-                        accumulated_grads = grads
-                    else:
-                        accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
-
-                # Apply accumulated gradients with Adam
-                params, opt_state = apply_accumulated_gradients_adam(
-                    params, opt_state, accumulated_grads, optimizer, len(accum_batches)
-                )
-                loss = accumulated_loss / len(accum_batches)
+            if use_pmap:
+                # Multi-GPU with pmap
+                if accum_steps == 1:
+                    # Direct pmap update (no gradient accumulation)
+                    params, opt_state, loss = pmap_train_step(
+                        params, opt_state, accum_batches[0], trainable_mask
+                    )
+                    # Loss is same on all devices, take first
+                    loss = loss[0]
+                else:
+                    # Gradient accumulation with pmap - NOT RECOMMENDED
+                    # For simplicity with pmap, use gradient_accumulation_steps=1
+                    raise NotImplementedError(
+                        "Gradient accumulation with pmap is not yet supported. "
+                        "Please set GRADIENT_ACCUMULATION_STEPS=1 or USE_PMAP=false"
+                    )
             else:
-                # Use Adam optimizer for single-step updates
-                params, opt_state, loss = compiled_train_step_adam(
-                    params,
-                    opt_state,
-                    accum_batches[0],
-                    model,
-                    optimizer,
-                    trainable_mask,
-                )
+                # Single-GPU path
+                if accum_steps > 1 and len(accum_batches) > 1:
+                    # Gradient accumulation with Adam
+                    accumulated_grads = None
+                    accumulated_loss = 0.0
+
+                    for batch in accum_batches:
+                        loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
+                        accumulated_loss += loss
+                        if accumulated_grads is None:
+                            accumulated_grads = grads
+                        else:
+                            accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+
+                    # Apply accumulated gradients with Adam
+                    params, opt_state = apply_accumulated_gradients_adam(
+                        params, opt_state, accumulated_grads, optimizer, len(accum_batches)
+                    )
+                    loss = accumulated_loss / len(accum_batches)
+                else:
+                    # Use Adam optimizer for single-step updates
+                    params, opt_state, loss = compiled_train_step_adam(
+                        params,
+                        opt_state,
+                        accum_batches[0],
+                        model,
+                        optimizer,
+                        trainable_mask,
+                    )
 
             # Reset accumulation
             accum_batches = []
@@ -498,12 +679,15 @@ def train_production(config):
         if step % config.logging.eval_every == 0:
             # Save validation results for debugging
             val_results_path = os.path.join(
-                config.checkpoint_dir, 
+                config.checkpoint_dir,
                 f"validation_results_step_{step:06d}.json"
             )
-            
+
+            # Unreplicate params for evaluation if using pmap
+            eval_params = unreplicate_params(params) if use_pmap else params
+
             valid_metrics = evaluate_model(
-                model, params, decode_fn, tokenizer,
+                model, eval_params, decode_fn, tokenizer,
                 valid_dataset, config,
                 num_examples=config.eval.num_examples,
                 verbose=False,
@@ -519,8 +703,10 @@ def train_production(config):
                 best_step = step
                 print(f"  New best accuracy! Saving best model...")
 
+                # Unreplicate params for saving if using pmap
+                save_params = unreplicate_params(params) if use_pmap else params
                 save_checkpoint(
-                    params,
+                    save_params,
                     step,
                     os.path.join(config.checkpoint_dir, "best"),
                     config,
@@ -537,8 +723,10 @@ def train_production(config):
 
         # Save checkpoint
         if step % config.logging.checkpoint_every == 0:
+            # Unreplicate params for saving if using pmap
+            save_params = unreplicate_params(params) if use_pmap else params
             save_checkpoint(
-                params,
+                save_params,
                 step,
                 config.checkpoint_dir,
                 config,
@@ -564,11 +752,14 @@ def train_production(config):
     # ==========================================================================
     print_banner("Step 5: Final Evaluation")
 
+    # Unreplicate params for final evaluation and saving if using pmap
+    final_params = unreplicate_params(params) if use_pmap else params
+
     # Save debug results for final evaluation
     final_results_path = os.path.join(config.checkpoint_dir, "final_eval_results.json")
 
     final_metrics = evaluate_model(
-        model, params, decode_fn, tokenizer,
+        model, final_params, decode_fn, tokenizer,
         valid_dataset, config,
         num_examples=None,  # Full validation
         verbose=True,
@@ -582,7 +773,7 @@ def train_production(config):
     print_banner("Step 6: Saving Final Model")
 
     final_path = save_checkpoint(
-        params,
+        final_params,
         total_steps,
         config.checkpoint_dir,
         config,
@@ -633,6 +824,11 @@ def main():
         default=str(PROJECT_ROOT / "envs" / ".env.production"),
         help="Path to .env file",
     )
+    parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip confirmation prompt",
+    )
 
     args = parser.parse_args()
 
@@ -651,10 +847,11 @@ def main():
     print("  2. Analyzed learning curves with 02_train_validate.py")
     print("  3. Tuned hyperparameters based on validation results")
 
-    response = input("\nProceed with production training? [y/N]: ")
-    if response.lower() != 'y':
-        print("Aborted.")
-        sys.exit(0)
+    if not args.yes:
+        response = input("\nProceed with production training? [y/N]: ")
+        if response.lower() != 'y':
+            print("Aborted.")
+            sys.exit(0)
 
     try:
         train_production(config)

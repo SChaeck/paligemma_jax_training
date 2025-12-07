@@ -506,10 +506,15 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
 
     Args:
         model: PaliGemma model (will be static in the returned function)
-        optimizer: optax optimizer
+        optimizer: optax optimizer (must be static - schedule is handled per-device)
 
     Returns:
         pmap'd training step function
+
+    Note:
+        The optimizer is captured in the closure and used on each device.
+        Learning rate schedules are handled by the optimizer's internal state,
+        which is properly replicated across devices.
     """
     def train_step(params, opt_state, batch, trainable_mask):
         """Single device training step with Adam (to be pmap'd)."""
@@ -538,7 +543,8 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
 
         loss, grads = jax.value_and_grad(loss_fn)(params)
 
-        # Average gradients across devices
+        # Average gradients across devices BEFORE masking
+        # This ensures all devices see the same averaged gradients
         grads = jax.lax.pmean(grads, axis_name="batch")
         loss = jax.lax.pmean(loss, axis_name="batch")
 
@@ -550,6 +556,7 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
         )
 
         # Apply optimizer update
+        # Each device updates its own copy with the same averaged gradients
         updates, new_opt_state = optimizer.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
 
@@ -765,12 +772,17 @@ class MetricsTracker:
 
 def create_data_sharding(config: Config = None):
     """
-    Create data sharding specification for multi-device training.
+    Create data sharding specification for single-device training.
+    
+    Note: Uses only the first GPU to avoid NCCL rendezvous issues.
+    For multi-GPU training, use pmap instead.
 
     Returns:
         Sharding specification
     """
-    mesh = jax.sharding.Mesh(jax.devices(), ("data",))
+    # Use only the first device to avoid multi-GPU NCCL issues
+    devices = [jax.devices()[0]]
+    mesh = jax.sharding.Mesh(devices, ("data",))
     return jax.sharding.NamedSharding(
         mesh,
         jax.sharding.PartitionSpec("data")

@@ -53,7 +53,7 @@ gsutil -m rsync -r ../XVR gs://YOUR_BUCKET/data/XVR
 cd /workspace
 git clone https://github.com/SChaeck/paligemma_jax_training.git
 cd paligemma_jax_training
-GCP_BUCKET=gs://YOUR_BUCKET ./setup.sh
+GCP_BUCKET=gs://riselab-xvr-us ./setup.sh
 ```
 
 **참고:** `YOUR_BUCKET`을 실제 GCP 버킷 이름으로 변경하세요.

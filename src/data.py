@@ -8,6 +8,7 @@ images and text for PaliGemma training.
 import json
 import os
 import queue
+import random
 import threading
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple
@@ -427,12 +428,24 @@ def preprocess_tokens(
     mask_ar = [0] * len(tokens)
     mask_loss = [0] * len(tokens)
 
+    # Debug: Check tokenization (sample 1% of calls)
+    import random
+    if random.random() < 0.01:
+        print(f"\n[DEBUG preprocess_tokens]")
+        print(f"  prefix length: {len(prefix)} chars")
+        print(f"  prefix tokens: {len(tokens)} tokens")
+        print(f"  suffix: {suffix[:50] if suffix else None}...")
+
     # Add suffix if provided
     if suffix:
         suffix_tokens = tokenizer.encode(suffix, add_eos=True)
         tokens += suffix_tokens
         mask_ar += [1] * len(suffix_tokens)
         mask_loss += [1] * len(suffix_tokens)
+
+        if random.random() < 0.01:
+            print(f"  suffix tokens: {len(suffix_tokens)} tokens")
+            print(f"  total tokens: {len(tokens)} tokens")
 
     # Mark input positions
     mask_input = [1] * len(tokens)
@@ -510,6 +523,15 @@ def collate_batch(samples: list, max_images: int = 6, image_size: int = 224) -> 
         batch_text[i] = sample['text']
         batch_mask_ar[i] = sample['mask_ar']
         batch_mask_loss[i] = sample['mask_loss']
+
+        # DEBUG: Check what we're copying (first sample only, random sampling)
+        if i == 0 and random.random() < 0.01:
+            print(f"[DEBUG collate_batch] Sample 0:")
+            print(f"  sample['text'] shape: {sample['text'].shape}")
+            print(f"  sample['text'] nonzero: {np.count_nonzero(sample['text'])}")
+            print(f"  sample['text'] first 10: {sample['text'][:10]}")
+            print(f"  batch_text[0] shape: {batch_text[0].shape}")
+            print(f"  batch_text[0] nonzero: {np.count_nonzero(batch_text[0])}")
 
     return {
         'image': batch_images,
@@ -647,12 +669,25 @@ def create_train_iterator(
             image_size=dataset.image_size,
         )
 
+        # DEBUG: Check token counts before yielding
+        if random.random() < 0.01:
+            print(f"[DEBUG create_train_iterator] After preprocess_tokens:")
+            print(f"  tokens shape: {np.asarray(tokens).shape}")
+            print(f"  tokens nonzero: {np.count_nonzero(tokens)}")
+            print(f"  mask_ar nonzero: {np.count_nonzero(mask_ar)}")
+            print(f"  mask_loss nonzero: {np.count_nonzero(mask_loss)}")
+            print(f"  first 10 tokens: {tokens[:10]}")
+
         yield {
             'image': images,  # Shape: [num_images, H, W, 3]
             'text': np.asarray(tokens),
             'mask_ar': np.asarray(mask_ar),
             'mask_loss': np.asarray(mask_loss),
             'num_images': num_images,
+            # Add metadata for debugging
+            'input_prompt': full_prefix,  # Original input text
+            'ground_truth': suffix,  # Original answer
+            'sample_id': sample.get('sample_id', None),
         }
 
 

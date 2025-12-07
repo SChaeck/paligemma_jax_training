@@ -445,22 +445,19 @@ def train_with_validation(config):
                 batch = shard_batch_for_pmap(batch, num_devices)
 
                 if accum_steps == 1:
-                    # Use Adam optimizer with pmap
+                    # Use Adam optimizer with pmap (no gradient accumulation)
                     params, opt_state, loss = pmap_train_step(
                         params, opt_state, batch, trainable_mask
                     )
                     # Loss is same on all devices, take first
                     accumulated_loss = loss[0]
                 else:
-                    # Gradient accumulation with pmap - compute on unreplicated params
-                    single_params = unreplicate_params(params)
-                    single_mask = unreplicate_params(trainable_mask)
-                    loss, grads = compute_loss_and_grads_for_accum(single_params, batch, model, single_mask)
-                    accumulated_loss += loss
-                    if accumulated_grads is None:
-                        accumulated_grads = grads
-                    else:
-                        accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
+                    # Gradient accumulation with pmap - NOT RECOMMENDED
+                    # For simplicity with pmap, use gradient_accumulation_steps=1
+                    raise NotImplementedError(
+                        "Gradient accumulation with pmap is not yet supported. "
+                        "Please set GRADIENT_ACCUMULATION_STEPS=1 or USE_PMAP=false"
+                    )
             else:
                 # Single GPU path with Adam optimizer
                 batch = shard_batch(batch, data_sharding, config)
@@ -486,25 +483,21 @@ def train_with_validation(config):
 
         # Apply accumulated gradients with Adam (only when accum_steps > 1)
         if accum_steps > 1:
+            # Note: This branch should not be reached when use_pmap=True
+            # because we raise NotImplementedError above
             accumulated_loss = accumulated_loss / accum_steps
 
-            if use_pmap:
-                # For pmap with accumulation, update the unreplicated params then re-replicate
-                single_params = unreplicate_params(params)
-                single_opt_state = unreplicate_params(opt_state)
-                single_params, single_opt_state = apply_accumulated_gradients_adam(
-                    single_params, single_opt_state, accumulated_grads, optimizer, accum_steps
-                )
-                params = replicate_params(single_params)
-                opt_state = replicate_params(single_opt_state)
-            else:
-                params, opt_state = apply_accumulated_gradients_adam(
-                    params, opt_state, accumulated_grads, optimizer, accum_steps
-                )
+            # Only single-GPU path reaches here
+            params, opt_state = apply_accumulated_gradients_adam(
+                params, opt_state, accumulated_grads, optimizer, accum_steps
+            )
             loss = accumulated_loss
 
         loss = float(jax.device_get(loss))
         step_time = time.time() - step_start
+
+        # Get current learning rate from schedule
+        lr = lr_schedule(step)
 
         # Track loss
         loss_window.append(loss)

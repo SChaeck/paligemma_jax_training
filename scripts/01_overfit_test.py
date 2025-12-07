@@ -25,6 +25,10 @@ sys.path.insert(0, str(PROJECT_ROOT))
 # Suppress TensorFlow warnings before importing
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
+# Force single GPU mode to avoid NCCL/sharding issues
+# Must be set BEFORE importing JAX
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+
 import jax
 import numpy as np
 import tensorflow as tf
