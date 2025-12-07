@@ -637,7 +637,7 @@ def create_train_iterator(
         else:
             full_prefix = sample['prompt']
 
-        suffix = sample['answer'].lower()
+        suffix = sample['answer']
         tokens, mask_ar, mask_loss, _ = preprocess_tokens(
             prefix=full_prefix,
             suffix=suffix,

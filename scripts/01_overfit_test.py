@@ -43,7 +43,10 @@ from src.data import XVRDataset, create_train_iterator, collate_batch
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
+    compiled_train_step_adam,
     compiled_train_step_with_accumulation,
+    create_optimizer,
+    create_optimizer_state,
     MetricsTracker,
     create_data_sharding,
     shard_batch,
@@ -169,7 +172,20 @@ def run_overfit_test(config):
     print(f"  Steps per epoch: {steps_per_epoch}")
     print(f"  Total steps: {total_steps}")
     print(f"  Learning rate: {config.training.learning_rate}")
+    print(f"  Optimizer: AdamW")
 
+    # Create AdamW optimizer with warmup + cosine decay (matches paligemma2 PyTorch)
+    optimizer = create_optimizer(
+        learning_rate=config.training.learning_rate,
+        total_steps=total_steps,
+        warmup_percent=config.training.warmup_percent,
+        weight_decay=0.0,  # No weight decay for fine-tuning
+        max_grad_norm=config.training.max_grad_norm,
+    )
+    opt_state = create_optimizer_state(optimizer, params)
+    print(f"  Optimizer state initialized")
+
+    # Keep lr_schedule for logging purposes only
     lr_schedule = create_learning_rate_schedule(
         base_learning_rate=config.training.learning_rate,
         total_steps=total_steps,
@@ -217,15 +233,15 @@ def run_overfit_test(config):
             batch = shard_batch(batch, data_sharding, config)
 
             if accum_steps == 1:
-                # No accumulation - use simple train step
-                lr = lr_schedule(step)
-                params, loss = compiled_train_step(
+                # No accumulation - use Adam optimizer
+                lr = lr_schedule(step)  # for logging only
+                params, opt_state, loss = compiled_train_step_adam(
                     params,
+                    opt_state,
                     batch,
                     model,
+                    optimizer,
                     trainable_mask,
-                    lr,
-                    max_grad_norm=config.training.max_grad_norm,
                 )
                 accumulated_loss = loss
             else:

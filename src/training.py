@@ -8,11 +8,12 @@ and metric computation.
 import functools
 import os
 import sys
-from typing import Any, Callable, Dict, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 
 from .config import Config
 
@@ -94,7 +95,231 @@ def create_learning_rate_schedule(
     return schedule_fn
 
 
-# JIT-compiled training step
+# =============================================================================
+# Optimizer utilities (Adam with warmup + cosine decay)
+# =============================================================================
+def create_optimizer(
+    learning_rate: float,
+    total_steps: int,
+    warmup_percent: float = 0.1,
+    weight_decay: float = 0.0,
+    max_grad_norm: float = 1.0,
+    b1: float = 0.9,
+    b2: float = 0.999,
+    eps: float = 1e-8,
+) -> optax.GradientTransformation:
+    """
+    Create AdamW optimizer with warmup and cosine decay schedule.
+
+    This matches the optimizer setup used in big_vision and paligemma2 PyTorch.
+
+    Args:
+        learning_rate: Peak learning rate
+        total_steps: Total number of training steps
+        warmup_percent: Percentage of steps for linear warmup
+        weight_decay: Weight decay coefficient (L2 regularization)
+        max_grad_norm: Maximum gradient norm for clipping
+        b1: Adam beta1 parameter
+        b2: Adam beta2 parameter
+        eps: Adam epsilon parameter
+
+    Returns:
+        optax GradientTransformation
+    """
+    warmup_steps = int(total_steps * warmup_percent)
+
+    # Learning rate schedule: linear warmup + cosine decay
+    schedule = optax.warmup_cosine_decay_schedule(
+        init_value=0.0,
+        peak_value=learning_rate,
+        warmup_steps=warmup_steps,
+        decay_steps=total_steps,
+        end_value=learning_rate * 0.01,  # End at 1% of peak
+    )
+
+    # Build optimizer chain
+    optimizer_chain = []
+
+    # 1. Gradient clipping
+    if max_grad_norm > 0:
+        optimizer_chain.append(optax.clip_by_global_norm(max_grad_norm))
+
+    # 2. AdamW optimizer
+    optimizer_chain.append(
+        optax.adamw(
+            learning_rate=schedule,
+            b1=b1,
+            b2=b2,
+            eps=eps,
+            weight_decay=weight_decay,
+        )
+    )
+
+    return optax.chain(*optimizer_chain)
+
+
+def create_optimizer_state(optimizer: optax.GradientTransformation, params: Dict) -> optax.OptState:
+    """
+    Initialize optimizer state.
+
+    Args:
+        optimizer: optax optimizer
+        params: Model parameters
+
+    Returns:
+        Initialized optimizer state
+    """
+    return optimizer.init(params)
+
+
+# JIT-compiled training step with Adam optimizer
+@functools.partial(jax.jit, donate_argnums=(0, 1), static_argnames=('model', 'optimizer'))
+def compiled_train_step_adam(
+    params: Dict,
+    opt_state: optax.OptState,
+    batch: Dict,
+    model: Any,
+    optimizer: optax.GradientTransformation,
+    trainable_mask: Dict,
+) -> Tuple[Dict, optax.OptState, float]:
+    """
+    JIT-compiled training step with Adam optimizer.
+
+    Args:
+        params: Model parameters
+        opt_state: Optimizer state
+        batch: Training batch
+        model: PaliGemma model (static)
+        optimizer: optax optimizer (static)
+        trainable_mask: Mask of trainable parameters
+
+    Returns:
+        Tuple of (new_params, new_opt_state, loss)
+    """
+    imgs = batch["image"]
+    txts = batch["text"]
+    mask_ar = batch["mask_ar"]
+
+    def loss_fn(params):
+        text_logits, _ = model.apply(
+            {"params": params},
+            imgs,
+            txts[:, :-1],
+            mask_ar[:, :-1],
+            train=True
+        )
+
+        logp = jax.nn.log_softmax(text_logits, axis=-1)
+        mask_loss = batch["mask_loss"][:, 1:]
+        targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
+
+        token_pplx = jnp.sum(logp * targets, axis=-1)
+        example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
+        example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+
+        return jnp.mean(example_loss)
+
+    loss, grads = jax.value_and_grad(loss_fn)(params)
+
+    # Mask gradients for frozen parameters
+    grads = jax.tree.map(
+        lambda g, m: jnp.where(m, g, jnp.zeros_like(g)),
+        grads,
+        trainable_mask
+    )
+
+    # Apply optimizer update
+    updates, new_opt_state = optimizer.update(grads, opt_state, params)
+    new_params = optax.apply_updates(params, updates)
+
+    return new_params, new_opt_state, loss
+
+
+def compute_loss_and_grads_for_accum(
+    params: Dict,
+    batch: Dict,
+    model: Any,
+    trainable_mask: Dict,
+) -> Tuple[float, Dict]:
+    """
+    Compute loss and gradients for gradient accumulation with Adam.
+
+    Args:
+        params: Model parameters
+        batch: Training batch
+        model: PaliGemma model
+        trainable_mask: Mask of trainable parameters
+
+    Returns:
+        Tuple of (loss, masked_gradients)
+    """
+    imgs = batch["image"]
+    txts = batch["text"]
+    mask_ar = batch["mask_ar"]
+
+    def loss_fn(params):
+        text_logits, _ = model.apply(
+            {"params": params},
+            imgs,
+            txts[:, :-1],
+            mask_ar[:, :-1],
+            train=True
+        )
+
+        logp = jax.nn.log_softmax(text_logits, axis=-1)
+        mask_loss = batch["mask_loss"][:, 1:]
+        targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
+
+        token_pplx = jnp.sum(logp * targets, axis=-1)
+        example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
+        example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+
+        return jnp.mean(example_loss)
+
+    loss, grads = jax.value_and_grad(loss_fn)(params)
+
+    # Mask gradients for frozen parameters
+    grads = jax.tree.map(
+        lambda g, m: jnp.where(m, g, jnp.zeros_like(g)),
+        grads,
+        trainable_mask
+    )
+
+    return loss, grads
+
+
+@functools.partial(jax.jit, donate_argnums=(0, 1), static_argnames=('optimizer',))
+def apply_accumulated_gradients_adam(
+    params: Dict,
+    opt_state: optax.OptState,
+    accumulated_grads: Dict,
+    optimizer: optax.GradientTransformation,
+    num_accum_steps: int,
+) -> Tuple[Dict, optax.OptState]:
+    """
+    Apply accumulated gradients using Adam optimizer.
+
+    Args:
+        params: Model parameters
+        opt_state: Optimizer state
+        accumulated_grads: Accumulated gradients (sum, not average)
+        optimizer: optax optimizer
+        num_accum_steps: Number of accumulation steps (to average grads)
+
+    Returns:
+        Tuple of (new_params, new_opt_state)
+    """
+    # Average the accumulated gradients
+    avg_grads = jax.tree.map(lambda g: g / num_accum_steps, accumulated_grads)
+
+    # Apply optimizer update
+    updates, new_opt_state = optimizer.update(avg_grads, opt_state, params)
+    new_params = optax.apply_updates(params, updates)
+
+    return new_params, new_opt_state
+
+
+# JIT-compiled training step (legacy SGD - kept for backward compatibility)
 @functools.partial(jax.jit, donate_argnums=(0,), static_argnames=('model',))
 def compiled_train_step(
     params: Dict,
@@ -273,6 +498,65 @@ def create_pmap_train_step(model: Any):
 
     # Create pmap'd version
     return jax.pmap(train_step, axis_name="batch", donate_argnums=(0,))
+
+
+def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformation):
+    """
+    Create a pmap-based training step with Adam optimizer for multi-GPU training.
+
+    Args:
+        model: PaliGemma model (will be static in the returned function)
+        optimizer: optax optimizer
+
+    Returns:
+        pmap'd training step function
+    """
+    def train_step(params, opt_state, batch, trainable_mask):
+        """Single device training step with Adam (to be pmap'd)."""
+        imgs = batch["image"]
+        txts = batch["text"]
+        mask_ar = batch["mask_ar"]
+
+        def loss_fn(params):
+            text_logits, _ = model.apply(
+                {"params": params},
+                imgs,
+                txts[:, :-1],
+                mask_ar[:, :-1],
+                train=True
+            )
+
+            logp = jax.nn.log_softmax(text_logits, axis=-1)
+            mask_loss = batch["mask_loss"][:, 1:]
+            targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
+
+            token_pplx = jnp.sum(logp * targets, axis=-1)
+            example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
+            example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+
+            return jnp.mean(example_loss)
+
+        loss, grads = jax.value_and_grad(loss_fn)(params)
+
+        # Average gradients across devices
+        grads = jax.lax.pmean(grads, axis_name="batch")
+        loss = jax.lax.pmean(loss, axis_name="batch")
+
+        # Mask gradients for frozen parameters
+        grads = jax.tree.map(
+            lambda g, m: jnp.where(m, g, jnp.zeros_like(g)),
+            grads,
+            trainable_mask
+        )
+
+        # Apply optimizer update
+        updates, new_opt_state = optimizer.update(grads, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+
+        return new_params, new_opt_state, loss
+
+    # Create pmap'd version
+    return jax.pmap(train_step, axis_name="batch", donate_argnums=(0, 1))
 
 
 def replicate_params(params: Dict) -> Dict:

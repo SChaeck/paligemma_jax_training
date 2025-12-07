@@ -48,7 +48,11 @@ from src.data import XVRDataset, create_train_iterator, collate_batch, prefetch_
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step,
-    compiled_train_step_with_accumulation,
+    compiled_train_step_adam,
+    compute_loss_and_grads_for_accum,
+    apply_accumulated_gradients_adam,
+    create_optimizer,
+    create_optimizer_state,
     MetricsTracker,
     create_data_sharding,
     shard_batch,
@@ -56,12 +60,10 @@ from src.training import (
     setup_bfloat16,
     print_device_info,
     get_num_devices,
-    create_pmap_train_step,
+    create_pmap_train_step_adam,
     replicate_params,
     unreplicate_params,
     shard_batch_for_pmap,
-    compute_loss_and_grads,
-    apply_gradients,
 )
 from src.evaluation import evaluate_model
 
@@ -355,7 +357,20 @@ def train_with_validation(config):
     print(f"  Total steps: {total_steps}")
     print(f"  Learning rate: {config.training.learning_rate}")
     print(f"  LR Schedule: {config.training.lr_schedule}")
+    print(f"  Optimizer: AdamW")
 
+    # Create AdamW optimizer with warmup + cosine decay (matches paligemma2 PyTorch)
+    optimizer = create_optimizer(
+        learning_rate=config.training.learning_rate,
+        total_steps=total_steps,
+        warmup_percent=config.training.warmup_percent,
+        weight_decay=0.0,  # No weight decay for fine-tuning
+        max_grad_norm=config.training.max_grad_norm,
+    )
+    opt_state = create_optimizer_state(optimizer, params)
+    print(f"  Optimizer state initialized")
+
+    # Keep lr_schedule for logging purposes only
     lr_schedule = create_learning_rate_schedule(
         base_learning_rate=config.training.learning_rate,
         total_steps=total_steps,
@@ -376,14 +391,15 @@ def train_with_validation(config):
         print(f"\n[Multi-GPU] Using pmap with {num_devices} devices")
         print(f"[Multi-GPU] Effective batch size per step: {config.training.batch_size} (split across {num_devices} GPUs)")
 
-        # Create pmap training step
-        pmap_train_step = create_pmap_train_step(model)
+        # Create pmap training step with Adam optimizer
+        pmap_train_step = create_pmap_train_step_adam(model, optimizer)
 
-        # Replicate params and mask across devices
+        # Replicate params, opt_state, and mask across devices
         params = replicate_params(params)
+        opt_state = replicate_params(opt_state)
         trainable_mask = replicate_params(trainable_mask)
     else:
-        print(f"\n[Single-GPU] Using jit compiled training")
+        print(f"\n[Single-GPU] Using jit compiled training with Adam optimizer")
         data_sharding = create_data_sharding(config)
 
     # Track curves
@@ -429,62 +445,62 @@ def train_with_validation(config):
                 batch = shard_batch_for_pmap(batch, num_devices)
 
                 if accum_steps == 1:
-                    lr = lr_schedule(step)
-                    # Replicate scalar values for pmap
-                    lr_replicated = jnp.array([lr] * num_devices)
-                    max_grad_norm_replicated = jnp.array([config.training.max_grad_norm] * num_devices)
-
-                    params, loss = pmap_train_step(
-                        params, batch, trainable_mask, lr_replicated, max_grad_norm_replicated
+                    # Use Adam optimizer with pmap
+                    params, opt_state, loss = pmap_train_step(
+                        params, opt_state, batch, trainable_mask
                     )
                     # Loss is same on all devices, take first
                     accumulated_loss = loss[0]
                 else:
-                    # For gradient accumulation with pmap, we need to handle differently
-                    # Fall back to single-device accumulation
-                    loss, grads = compute_loss_and_grads(unreplicate_params(params), batch, model)
+                    # Gradient accumulation with pmap - compute on unreplicated params
+                    single_params = unreplicate_params(params)
+                    single_mask = unreplicate_params(trainable_mask)
+                    loss, grads = compute_loss_and_grads_for_accum(single_params, batch, model, single_mask)
                     accumulated_loss += loss
                     if accumulated_grads is None:
                         accumulated_grads = grads
                     else:
                         accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
             else:
-                # Single GPU path
+                # Single GPU path with Adam optimizer
                 batch = shard_batch(batch, data_sharding, config)
 
                 if accum_steps == 1:
-                    lr = lr_schedule(step)
-                    params, loss = compiled_train_step(
+                    params, opt_state, loss = compiled_train_step_adam(
                         params,
+                        opt_state,
                         batch,
                         model,
+                        optimizer,
                         trainable_mask,
-                        lr,
-                        max_grad_norm=config.training.max_grad_norm,
                     )
                     accumulated_loss = loss
                 else:
-                    loss, grads = compute_loss_and_grads(params, batch, model)
+                    # Gradient accumulation - compute loss and grads
+                    loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
                     accumulated_loss += loss
                     if accumulated_grads is None:
                         accumulated_grads = grads
                     else:
                         accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
 
-        # Apply accumulated gradients (only when accum_steps > 1)
+        # Apply accumulated gradients with Adam (only when accum_steps > 1)
         if accum_steps > 1:
-            lr = lr_schedule(step)
-            accumulated_grads = jax.tree.map(lambda g: g / accum_steps, accumulated_grads)
             accumulated_loss = accumulated_loss / accum_steps
 
             if use_pmap:
                 # For pmap with accumulation, update the unreplicated params then re-replicate
                 single_params = unreplicate_params(params)
-                single_mask = unreplicate_params(trainable_mask)
-                single_params = apply_gradients(single_params, accumulated_grads, single_mask, lr, config.training.max_grad_norm)
+                single_opt_state = unreplicate_params(opt_state)
+                single_params, single_opt_state = apply_accumulated_gradients_adam(
+                    single_params, single_opt_state, accumulated_grads, optimizer, accum_steps
+                )
                 params = replicate_params(single_params)
+                opt_state = replicate_params(single_opt_state)
             else:
-                params = apply_gradients(params, accumulated_grads, trainable_mask, lr, config.training.max_grad_norm)
+                params, opt_state = apply_accumulated_gradients_adam(
+                    params, opt_state, accumulated_grads, optimizer, accum_steps
+                )
             loss = accumulated_loss
 
         loss = float(jax.device_get(loss))
