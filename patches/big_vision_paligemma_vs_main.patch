@@ -1,0 +1,152 @@
+diff --git a/big_vision/models/proj/paligemma/paligemma.py b/big_vision/models/proj/paligemma/paligemma.py
+index aecbce0..d8b1a4e 100644
+--- a/big_vision/models/proj/paligemma/paligemma.py
++++ b/big_vision/models/proj/paligemma/paligemma.py
+@@ -93,24 +93,29 @@ class Model(nn.Module):
+     return ztxt, out
+ 
+   def embed_image_and_text(self, image, text, *,
+-                           input_mask=None, mask_ar=None, train=False):
++                           input_mask=None, mask_ar=None, num_images=None, train=False):
+     """Concats image/text into a sequence of embeded tokens to pass to `llm`.
+ 
+     Args:
+-      image: float[B, H, W, 3] image to be embedded by the `img` model and used
+-        as prefix to the sequence passed to the `llm` model.
++      image: float[B, H, W, 3] or float[B, T, H, W, 3] image to be embedded by 
++        the `img` model and used as prefix to the sequence passed to the `llm` model.
+       text: int32[B, T] token sequence to embedded by the `llm`.
+       input_mask: bool[B, T] true if the text token is a valid token and false
+         if its a token to pad the sequence. Defaults to all being input tokens.
+       mask_ar: int32[B, T] mask that's 1 where `text` should be attended to
+         causally, and 0 where it can be attended to with full self-attention.
+         Defaults to all text tokens being auto-regressive.
++      num_images: int32[B] number of actual images per sample (for masking padded images).
++        If None, all image tokens are considered valid.
+       train: bool whether we're in train or test mode (dropout etc).
+ 
+     Returns:
+       Tuple (x: float[B, N, E], input_mask: bool[B, N], mask_ar: int[B, N]) and
+       auxiliary outputs.
+     """
++    # Embed images and text normally
++    # Note: Even if num_images=0, we still embed images to avoid shape issues
++    # The masking will handle num_images=0 case by setting all image tokens to invalid
+     zimg, out_img = self.embed_image(image, train=train)
+     ztxt, out_txt = self.embed_text(text, train=train)
+ 
+@@ -121,21 +126,77 @@ class Model(nn.Module):
+ 
+     # Concatenate embeded image and text into a single token sequence.
+     x = jnp.concatenate([zimg, ztxt], axis=1)
+-    _, img_len, _ = zimg.shape
++    batch_size, img_len, _ = zimg.shape
++    txt_len = ztxt.shape[1]
+     pad_width = ((0, 0), (img_len, 0))
+     mask_ar = jnp.pad(mask_ar, pad_width, constant_values=0)
+-    input_mask = jnp.pad(input_mask, pad_width, constant_values=True)
++    
++    # Create image token mask based on num_images
++    if num_images is not None:
++      # Calculate tokens per image (img_len / max_images)
++      # For 5D input [B, T, H, W, 3], T is the max number of images
++      if len(image.shape) == 5:
++        max_images = image.shape[1]
++        # Handle num_images=0 case (DISABLE_IMAGES=1)
++        if max_images == 0 or img_len == 0:
++          # No image tokens, just use text input_mask (no padding needed)
++          input_mask = input_mask
++        else:
++          tokens_per_image = img_len // max_images
++          
++          # Create mask for image tokens: True if token belongs to valid image
++          # num_images: [B], we need to create [B, img_len] mask
++          img_token_indices = jnp.arange(img_len)[None, :]  # [1, img_len]
++          image_indices = img_token_indices // tokens_per_image  # Which image each token belongs to
++          valid_image_mask = image_indices < num_images[:, None]  # [B, img_len]
++          
++          # Pad with text input_mask
++          input_mask = jnp.concatenate([valid_image_mask, input_mask], axis=1)
++      else:
++        # 4D input, all image tokens are valid
++        input_mask = jnp.pad(input_mask, pad_width, constant_values=True)
++    else:
++      # No num_images provided, all image tokens are valid
++      input_mask = jnp.pad(input_mask, pad_width, constant_values=True)
++
++    # Debug logging (controlled by environment variable MODEL_DEBUG_EMBEDDING)
++    # Note: This will log for ALL batches when enabled, so use sparingly
++    # Set MODEL_DEBUG_EMBEDDING=1 in environment to enable
++    import os
++    if os.environ.get("MODEL_DEBUG_EMBEDDING", "0") == "1":
++      # Use jax.debug.print for JIT compatibility
++      # Note: This will print for every call, so only enable for debugging
++      jax.debug.print("[MODEL EMBED] ========================================")
++      jax.debug.print("[MODEL EMBED] embed_image_and_text output:")
++      jax.debug.print("[MODEL EMBED]   zimg shape: {shape}", shape=zimg.shape)
++      jax.debug.print("[MODEL EMBED]   ztxt shape: {shape}", shape=ztxt.shape)
++      jax.debug.print("[MODEL EMBED]   x (concatenated) shape: {shape}", shape=x.shape)
++      jax.debug.print("[MODEL EMBED]   Total sequence length: {len}", len=x.shape[1])
++      jax.debug.print("[MODEL EMBED]   input_mask shape: {shape}, valid tokens per sample: {nz}", 
++                     shape=input_mask.shape, nz=jnp.sum(input_mask, axis=-1))
++      jax.debug.print("[MODEL EMBED]   mask_ar shape: {shape}, causal tokens per sample: {nz}",
++                     shape=mask_ar.shape, nz=jnp.sum(mask_ar, axis=-1))
++      if num_images is not None:
++        jax.debug.print("[MODEL EMBED]   num_images: {num}", num=num_images)
++        if len(image.shape) == 5:
++          jax.debug.print("[MODEL EMBED]   tokens_per_image: {tokens}", tokens=tokens_per_image)
++          jax.debug.print("[MODEL EMBED]   valid_image_mask sum per sample: {sums}", 
++                         sums=jnp.sum(valid_image_mask, axis=-1))
++      jax.debug.print("[MODEL EMBED] ========================================")
+ 
+     return (x, input_mask, mask_ar), {**out_img, **out_txt}
+ 
+-  def __call__(self, image, text, mask_ar, train=False):
++  def __call__(self, image, text, mask_ar, num_images=None, train=False):
+     """Concats image/text and returns text logits.
+ 
+     Args:
+-      image: float32[B, H, W, 3] image that can be passed to the `img` model.
++      image: float32[B, H, W, 3] or float32[B, T, H, W, 3] image that can be 
++        passed to the `img` model.
+       text: int32[B, T] token sequence that can be embedded by the `txt` model.
+       mask_ar: int32[B, T] mask that's 1 where `text` should be attended to
+         causally, and 0 where it can be attended to with full self-attention.
++      num_images: int32[B] number of actual images per sample (for masking padded images).
++        If None, all image tokens are considered valid.
+       train: bool whether we're in train or test mode (dropout etc).
+ 
+     Returns:
+@@ -144,10 +205,31 @@ class Model(nn.Module):
+     """
+     # Embed the image and text.
+     (x, input_mask, mask_ar), out = self.embed_image_and_text(
+-        image, text, mask_ar=mask_ar, train=train)
++        image, text, mask_ar=mask_ar, num_images=num_images, train=train)
+ 
+     # Call transformer on the embedded token sequence.
+     attn_mask = out["attn_mask"] = make_attn_mask(input_mask, mask_ar)
++    
++    # Debug logging for attention mask and LLM input
++    # Controlled by environment variable MODEL_DEBUG_FORWARD
++    import os
++    if os.environ.get("MODEL_DEBUG_FORWARD", "0") == "1":
++      jax.debug.print("[MODEL FORWARD] ========================================")
++      jax.debug.print("[MODEL FORWARD] Input to LLM:")
++      jax.debug.print("[MODEL FORWARD]   x (embeddings) shape: {shape}", shape=x.shape)
++      jax.debug.print("[MODEL FORWARD]   attn_mask shape: {shape}", shape=attn_mask.shape)
++      jax.debug.print("[MODEL FORWARD]   attn_mask valid positions per sample: {sums}",
++                     sums=jnp.sum(attn_mask, axis=(-2, -1)))
++      jax.debug.print("[MODEL FORWARD]   input_mask valid tokens per sample: {sums}",
++                     sums=jnp.sum(input_mask, axis=-1))
++      jax.debug.print("[MODEL FORWARD]   mask_ar causal tokens per sample: {sums}",
++                     sums=jnp.sum(mask_ar, axis=-1))
++      # Show first sample's attention pattern (first 20x20 for readability)
++      attn_sample = attn_mask[0, :20, :20]
++      jax.debug.print("[MODEL FORWARD]   First sample attn_mask[0, :20, :20] (True=can attend):")
++      jax.debug.print("[MODEL FORWARD]     {mask}", mask=attn_sample)
++      jax.debug.print("[MODEL FORWARD] ========================================")
++    
+     _, out_llm = self._llm(x, mask=attn_mask, train=train)
+     for k, v in out_llm.items():
+       out[f"llm/{k}"] = v
