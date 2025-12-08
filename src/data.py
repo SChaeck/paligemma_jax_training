@@ -20,6 +20,49 @@ from PIL import Image
 from .config import Config
 
 
+# =============================================================================
+# Data Pipeline Logging
+# =============================================================================
+# Set DATA_PIPELINE_DEBUG=1 in environment to enable detailed logging
+# Or call enable_pipeline_debug() to enable programmatically
+
+_PIPELINE_DEBUG = os.environ.get("DATA_PIPELINE_DEBUG", "0") == "1"
+_DEBUG_SAMPLE_COUNT = 0  # Track how many samples we've logged
+_DEBUG_MAX_SAMPLES = 3   # Only log first N samples in detail
+
+def enable_pipeline_debug(max_samples: int = 3):
+    """Enable detailed pipeline debugging."""
+    global _PIPELINE_DEBUG, _DEBUG_MAX_SAMPLES
+    _PIPELINE_DEBUG = True
+    _DEBUG_MAX_SAMPLES = max_samples
+    print(f"[PIPELINE DEBUG] Enabled - will log first {max_samples} samples in detail")
+
+def disable_pipeline_debug():
+    """Disable pipeline debugging."""
+    global _PIPELINE_DEBUG
+    _PIPELINE_DEBUG = False
+    print("[PIPELINE DEBUG] Disabled")
+
+def _should_log_sample() -> bool:
+    """Check if we should log this sample."""
+    global _DEBUG_SAMPLE_COUNT
+    if not _PIPELINE_DEBUG:
+        return False
+    return _DEBUG_SAMPLE_COUNT < _DEBUG_MAX_SAMPLES
+
+def _increment_sample_count():
+    """Increment logged sample count."""
+    global _DEBUG_SAMPLE_COUNT
+    _DEBUG_SAMPLE_COUNT += 1
+
+def _log_pipeline(stage: str, message: str, indent: int = 0):
+    """Log a pipeline message."""
+    if not _PIPELINE_DEBUG:
+        return
+    prefix = "  " * indent
+    print(f"[PIPELINE {stage}] {prefix}{message}")
+
+
 class XVRDataset:
     """
     Dataset class for loading XVR data in JSONL format.
@@ -108,13 +151,27 @@ class XVRDataset:
         # Get ground truth answer
         answer = data.get('ground_truth_answer', '')
 
-        return {
+        result = {
             'sample_id': data['sample_id'],
             'task': data['task'],
             'images': images,
             'prompt': prompt,
             'answer': answer,
         }
+        
+        # Pipeline logging
+        if _should_log_sample():
+            _log_pipeline("1.PARSE", "=" * 60)
+            _log_pipeline("1.PARSE", f"Sample ID: {result['sample_id']}")
+            _log_pipeline("1.PARSE", f"Task: {result['task']}")
+            _log_pipeline("1.PARSE", f"Number of images: {len(images)}")
+            for i, img_path in enumerate(images):
+                _log_pipeline("1.PARSE", f"  Image {i}: {img_path}", indent=1)
+            _log_pipeline("1.PARSE", f"Prompt length: {len(prompt)} chars")
+            _log_pipeline("1.PARSE", f"Prompt preview: {prompt[:100]}...")
+            _log_pipeline("1.PARSE", f"Answer: '{answer}'")
+        
+        return result
 
     def load_image(self, image_path: str) -> Image.Image:
         """
@@ -131,7 +188,15 @@ class XVRDataset:
         if not full_path.exists():
             raise FileNotFoundError(f"Image not found: {full_path}")
 
-        return Image.open(full_path)
+        img = Image.open(full_path)
+        
+        # Pipeline logging
+        if _should_log_sample():
+            _log_pipeline("2.LOAD_IMG", f"Loaded: {image_path}")
+            _log_pipeline("2.LOAD_IMG", f"  Original size: {img.size} (W x H)", indent=1)
+            _log_pipeline("2.LOAD_IMG", f"  Mode: {img.mode}", indent=1)
+        
+        return img
 
     def get_tfdata(self, shuffle: bool = False, repeat: bool = False) -> tf.data.Dataset:
         """
@@ -234,23 +299,54 @@ def preprocess_multi_images(
     Returns:
         Tuple of:
         - Preprocessed images as numpy array with shape [num_images, H, W, 3] in range [-1, 1]
-        - Number of actual images
+        - Number of actual images (0 if DISABLE_IMAGES=1)
     """
+    # Check if images are disabled via environment variable
+    # Set DISABLE_IMAGES=1 to train without images (text-only training)
+    disable_images = os.environ.get("DISABLE_IMAGES", "0") == "1"
+    
+    if disable_images:
+        # Return empty image tensor with num_images=0
+        # This will cause the model to skip image token generation
+        # Shape: [0, H, W, 3] - empty array with correct dimensions
+        empty_images = np.zeros((0, size, size, 3), dtype=np.float32)
+        
+        if _should_log_sample():
+            _log_pipeline("3.PREPROCESS_IMGS", "DISABLE_IMAGES=1: Skipping image processing")
+            _log_pipeline("3.PREPROCESS_IMGS", f"Returning empty images with shape: {empty_images.shape}")
+            _log_pipeline("3.PREPROCESS_IMGS", f"num_images: 0 (images disabled)")
+        
+        return empty_images, 0
+    
     if len(images) == 0:
         raise ValueError("At least one image is required")
 
+    original_count = len(images)
+    
     # Limit number of images
     images = images[:max_images]
     num_images = len(images)
 
+    # Pipeline logging
+    if _should_log_sample():
+        _log_pipeline("3.PREPROCESS_IMGS", f"Input: {original_count} images, max_images={max_images}")
+        _log_pipeline("3.PREPROCESS_IMGS", f"Using: {num_images} images (after limit)")
+
     # Preprocess each image individually
     processed_images = []
-    for img in images:
+    for i, img in enumerate(images):
         processed = preprocess_single_image(img, size)
         processed_images.append(processed)
+        
+        if _should_log_sample():
+            _log_pipeline("3.PREPROCESS_IMGS", f"  Image {i}: shape={processed.shape}, range=[{processed.min():.2f}, {processed.max():.2f}]", indent=1)
 
     # Stack into [num_images, H, W, 3]
     stacked = np.stack(processed_images, axis=0)
+
+    if _should_log_sample():
+        _log_pipeline("3.PREPROCESS_IMGS", f"Output stacked shape: {stacked.shape}")
+        _log_pipeline("3.PREPROCESS_IMGS", f"  Expected: [{num_images}, {size}, {size}, 3]")
 
     return stacked, num_images
 
@@ -428,24 +524,31 @@ def preprocess_tokens(
     mask_ar = [0] * len(tokens)
     mask_loss = [0] * len(tokens)
 
-    # Debug: Check tokenization (sample 1% of calls)
-    import random
-    if random.random() < 0.01:
-        print(f"\n[DEBUG preprocess_tokens]")
-        print(f"  prefix length: {len(prefix)} chars")
-        print(f"  prefix tokens: {len(tokens)} tokens")
-        print(f"  suffix: {suffix[:50] if suffix else None}...")
+    # Calculate image token count
+    image_tokens_per_image = get_image_token_count(image_size, patch_size)
+    total_image_tokens = image_tokens_per_image * num_images
+
+    # Pipeline logging
+    if _should_log_sample():
+        _log_pipeline("4.TOKENIZE", f"Tokenizing text...")
+        _log_pipeline("4.TOKENIZE", f"  num_images: {num_images}")
+        _log_pipeline("4.TOKENIZE", f"  image_tokens_per_image: {image_tokens_per_image} ({image_size}x{image_size} / {patch_size}x{patch_size})")
+        _log_pipeline("4.TOKENIZE", f"  total_image_tokens: {total_image_tokens}")
+        _log_pipeline("4.TOKENIZE", f"  prefix: '{prefix[:80]}...'")
+        _log_pipeline("4.TOKENIZE", f"  prefix tokens (with BOS + separator): {len(tokens)}")
 
     # Add suffix if provided
+    suffix_token_count = 0
     if suffix:
         suffix_tokens = tokenizer.encode(suffix, add_eos=True)
+        suffix_token_count = len(suffix_tokens)
         tokens += suffix_tokens
         mask_ar += [1] * len(suffix_tokens)
         mask_loss += [1] * len(suffix_tokens)
 
-        if random.random() < 0.01:
-            print(f"  suffix tokens: {len(suffix_tokens)} tokens")
-            print(f"  total tokens: {len(tokens)} tokens")
+        if _should_log_sample():
+            _log_pipeline("4.TOKENIZE", f"  suffix (answer): '{suffix}'")
+            _log_pipeline("4.TOKENIZE", f"  suffix tokens (with EOS): {suffix_token_count}")
 
     # Mark input positions
     mask_input = [1] * len(tokens)
@@ -454,14 +557,10 @@ def preprocess_tokens(
     original_len = len(tokens)
 
     # Pad to sequence length if specified
+    truncated = False
     if seqlen:
-        # Warn if truncation is happening (important for debugging)
         if len(tokens) > seqlen:
-            # Only warn occasionally to avoid spam
-            import random
-            if random.random() < 0.01:  # 1% of truncations
-                print(f"Warning: Truncating sequence from {len(tokens)} to {seqlen} tokens. "
-                      f"Consider increasing MAX_SEQ_LENGTH.")
+            truncated = True
 
         padding = [0] * max(0, seqlen - len(tokens))
         tokens = tokens[:seqlen] + padding
@@ -469,12 +568,108 @@ def preprocess_tokens(
         mask_loss = mask_loss[:seqlen] + padding
         mask_input = mask_input[:seqlen] + padding
 
+    if _should_log_sample():
+        _log_pipeline("4.TOKENIZE", f"  --- Final text token breakdown ---")
+        _log_pipeline("4.TOKENIZE", f"  Total text tokens (before padding): {original_len}")
+        _log_pipeline("4.TOKENIZE", f"  Truncated: {truncated}")
+        _log_pipeline("4.TOKENIZE", f"  Padded to seqlen: {seqlen}")
+        _log_pipeline("4.TOKENIZE", f"  mask_ar nonzero (causal tokens): {sum(mask_ar)}")
+        _log_pipeline("4.TOKENIZE", f"  mask_loss nonzero (trainable tokens): {sum(mask_loss)}")
+        _log_pipeline("4.TOKENIZE", f"  --- Total sequence (image + text) ---")
+        _log_pipeline("4.TOKENIZE", f"  Image tokens: {total_image_tokens}")
+        _log_pipeline("4.TOKENIZE", f"  Text tokens: {original_len}")
+        _log_pipeline("4.TOKENIZE", f"  TOTAL: {total_image_tokens + original_len}")
+
     return (
         np.array(tokens, dtype=np.int32),
         np.array(mask_ar, dtype=np.int32),
         np.array(mask_loss, dtype=np.int32),
         np.array(mask_input, dtype=np.int32),
     )
+
+
+def _validate_batch_images(
+    batch_images: np.ndarray,
+    samples: list,
+    batch_num_images: np.ndarray,
+    max_images: int,
+) -> None:
+    """
+    Validate that images in batch match the original samples.
+    
+    This helps catch data corruption or mixing issues early.
+    
+    Args:
+        batch_images: Batched images [B, max_images, H, W, 3]
+        samples: Original sample list
+        batch_num_images: Number of images per sample [B]
+        max_images: Maximum number of images
+    """
+    import os
+    # Only validate occasionally to avoid performance impact
+    validate = os.environ.get("VALIDATE_BATCH_IMAGES", "0") == "1"
+    if not validate:
+        return
+    
+    batch_size = len(samples)
+    mismatches = []
+    
+    for i in range(batch_size):
+        num_images = int(batch_num_images[i])
+        sample = samples[i]
+        sample_id = sample.get('sample_id', f'sample_{i}')
+        original_images = sample.get('image', None)
+        
+        if original_images is None or num_images == 0:
+            continue
+        
+        # Compare each image
+        for img_idx in range(num_images):
+            batch_img = batch_images[i, img_idx]
+            original_img = original_images[img_idx]
+            
+            # Check if images match (allowing for small floating point differences)
+            if not np.allclose(batch_img, original_img, atol=1e-5, rtol=1e-5):
+                # Check if it's just padding (all zeros)
+                if np.allclose(batch_img, 0.0, atol=1e-5):
+                    mismatches.append(
+                        f"Sample {i} ({sample_id}), image {img_idx}: "
+                        f"Batch has zeros (padding) but original has data"
+                    )
+                elif np.allclose(original_img, 0.0, atol=1e-5):
+                    mismatches.append(
+                        f"Sample {i} ({sample_id}), image {img_idx}: "
+                        f"Original has zeros but batch has data"
+                    )
+                else:
+                    # Actual mismatch
+                    max_diff = np.max(np.abs(batch_img - original_img))
+                    mismatches.append(
+                        f"Sample {i} ({sample_id}), image {img_idx}: "
+                        f"Images don't match! Max diff: {max_diff:.6f}"
+                    )
+        
+        # Check that padding slots are zeros
+        for img_idx in range(num_images, max_images):
+            batch_img = batch_images[i, img_idx]
+            if not np.allclose(batch_img, 0.0, atol=1e-5):
+                mismatches.append(
+                    f"Sample {i} ({sample_id}), image {img_idx}: "
+                    f"Padding slot is not zero!"
+                )
+    
+    if mismatches:
+        print(f"\n[VALIDATION ERROR] Found {len(mismatches)} image mismatches in batch:")
+        for mismatch in mismatches[:10]:  # Show first 10
+            print(f"  {mismatch}")
+        if len(mismatches) > 10:
+            print(f"  ... and {len(mismatches) - 10} more mismatches")
+        print("[VALIDATION ERROR] This indicates data corruption or mixing issues!\n")
+    else:
+        # Only print success message occasionally
+        import random
+        if random.random() < 0.50:  # 50% chance
+            print(f"[VALIDATION] Batch image validation passed for {batch_size} samples")
 
 
 def collate_batch(samples: list, max_images: int = 6, image_size: int = 224) -> Dict[str, np.ndarray]:
@@ -505,6 +700,15 @@ def collate_batch(samples: list, max_images: int = 6, image_size: int = 224) -> 
     # Get dimensions from first sample
     seq_len = samples[0]['text'].shape[0]
 
+    # Pipeline logging - only log first few batches
+    _should_log_collate = _PIPELINE_DEBUG and _DEBUG_SAMPLE_COUNT <= _DEBUG_MAX_SAMPLES + 10
+    if _should_log_collate:
+        _log_pipeline("6.COLLATE", "=" * 60)
+        _log_pipeline("6.COLLATE", f"Collating {batch_size} samples into batch")
+        _log_pipeline("6.COLLATE", f"  max_images: {max_images}")
+        _log_pipeline("6.COLLATE", f"  image_size: {image_size}")
+        _log_pipeline("6.COLLATE", f"  seq_len: {seq_len}")
+
     # Initialize batch arrays
     batch_images = np.zeros((batch_size, max_images, image_size, image_size, 3), dtype=np.float32)
     batch_text = np.zeros((batch_size, seq_len), dtype=np.int32)
@@ -517,21 +721,38 @@ def collate_batch(samples: list, max_images: int = 6, image_size: int = 224) -> 
         batch_num_images[i] = num_images
 
         # Copy images (sample['image'] has shape [num_images, H, W, 3])
-        batch_images[i, :num_images] = sample['image']
+        # If num_images=0 (DISABLE_IMAGES=1), sample['image'] is empty [0, H, W, 3]
+        # and batch_images[i, :0] is an empty slice, so this is safe
+        if num_images > 0:
+            batch_images[i, :num_images] = sample['image']
 
         # Copy text and masks
         batch_text[i] = sample['text']
         batch_mask_ar[i] = sample['mask_ar']
         batch_mask_loss[i] = sample['mask_loss']
 
-        # DEBUG: Check what we're copying (first sample only, random sampling)
-        if i == 0 and random.random() < 0.01:
-            print(f"[DEBUG collate_batch] Sample 0:")
-            print(f"  sample['text'] shape: {sample['text'].shape}")
-            print(f"  sample['text'] nonzero: {np.count_nonzero(sample['text'])}")
-            print(f"  sample['text'] first 10: {sample['text'][:10]}")
-            print(f"  batch_text[0] shape: {batch_text[0].shape}")
-            print(f"  batch_text[0] nonzero: {np.count_nonzero(batch_text[0])}")
+        # Pipeline logging per sample
+        if _should_log_collate:
+            sample_id = sample.get('sample_id', f'sample_{i}')
+            _log_pipeline("6.COLLATE", f"  Sample {i} ({sample_id}):")
+            _log_pipeline("6.COLLATE", f"    num_images: {num_images}")
+            _log_pipeline("6.COLLATE", f"    input image shape: {sample['image'].shape}")
+            _log_pipeline("6.COLLATE", f"    text nonzero: {np.count_nonzero(sample['text'])}")
+            _log_pipeline("6.COLLATE", f"    mask_loss nonzero: {np.count_nonzero(sample['mask_loss'])}")
+            _log_pipeline("6.COLLATE", f"    ground_truth: '{sample.get('ground_truth', 'N/A')}'")
+
+    if _should_log_collate:
+        _log_pipeline("6.COLLATE", f"  --- Final Batch Shape ---")
+        _log_pipeline("6.COLLATE", f"  batch_images: {batch_images.shape} (expected: [{batch_size}, {max_images}, {image_size}, {image_size}, 3])")
+        _log_pipeline("6.COLLATE", f"  batch_text: {batch_text.shape}")
+        _log_pipeline("6.COLLATE", f"  batch_mask_ar: {batch_mask_ar.shape}")
+        _log_pipeline("6.COLLATE", f"  batch_mask_loss: {batch_mask_loss.shape}")
+        _log_pipeline("6.COLLATE", f"  batch_num_images: {batch_num_images}")
+        _log_pipeline("6.COLLATE", "=" * 60)
+
+    # Validation: Verify that images in batch match original samples
+    # This helps catch any data corruption or mixing issues
+    _validate_batch_images(batch_images, samples, batch_num_images, max_images)
 
     return {
         'image': batch_images,
@@ -631,26 +852,38 @@ def create_train_iterator(
     for line in tf_dataset.as_numpy_iterator():
         sample = dataset.parse_sample(line.decode('utf-8'))
 
-        if not sample['images']:
-            continue
-
-        # Load and process ALL images as separate frames (NOT grid!)
-        try:
-            loaded_images = []
-            for img_path in sample['images']:
-                img = dataset.load_image(img_path)
-                loaded_images.append(img)
-
-            # Process images as separate frames [num_images, H, W, 3]
-            # This is the CORRECT approach for multi-image!
+        # Check if images are disabled via environment variable
+        disable_images = os.environ.get("DISABLE_IMAGES", "0") == "1"
+        
+        if disable_images:
+            # Skip image loading and create empty images
+            # preprocess_multi_images will handle the empty list and return num_images=0
             images, num_images = preprocess_multi_images(
-                loaded_images,
+                [],  # Empty list - will be handled by preprocess_multi_images
                 size=dataset.image_size,
                 max_images=max_images,
             )
-        except Exception as e:
-            print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
-            continue
+        else:
+            if not sample['images']:
+                continue
+
+            # Load and process ALL images as separate frames (NOT grid!)
+            try:
+                loaded_images = []
+                for img_path in sample['images']:
+                    img = dataset.load_image(img_path)
+                    loaded_images.append(img)
+
+                # Process images as separate frames [num_images, H, W, 3]
+                # This is the CORRECT approach for multi-image!
+                images, num_images = preprocess_multi_images(
+                    loaded_images,
+                    size=dataset.image_size,
+                    max_images=max_images,
+                )
+            except Exception as e:
+                print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
+                continue
 
         # Combine prompt_prefix (if any) with the actual question
         # Format: "{prompt_prefix}{actual_question}" (with space if prefix exists)
@@ -669,14 +902,30 @@ def create_train_iterator(
             image_size=dataset.image_size,
         )
 
-        # DEBUG: Check token counts before yielding
-        if random.random() < 0.01:
-            print(f"[DEBUG create_train_iterator] After preprocess_tokens:")
-            print(f"  tokens shape: {np.asarray(tokens).shape}")
-            print(f"  tokens nonzero: {np.count_nonzero(tokens)}")
-            print(f"  mask_ar nonzero: {np.count_nonzero(mask_ar)}")
-            print(f"  mask_loss nonzero: {np.count_nonzero(mask_loss)}")
-            print(f"  first 10 tokens: {tokens[:10]}")
+        # Pipeline logging - Final yield
+        if _should_log_sample():
+            image_tokens_per_image = get_image_token_count(dataset.image_size, patch_size=14)
+            total_image_tokens = image_tokens_per_image * num_images
+            _log_pipeline("5.YIELD", "=" * 60)
+            _log_pipeline("5.YIELD", f"Final sample ready to yield:")
+            _log_pipeline("5.YIELD", f"  sample_id: {sample.get('sample_id', None)}")
+            _log_pipeline("5.YIELD", f"  --- Images ---")
+            _log_pipeline("5.YIELD", f"  image.shape: {images.shape} (expected: [{num_images}, 224, 224, 3])")
+            _log_pipeline("5.YIELD", f"  num_images: {num_images}")
+            _log_pipeline("5.YIELD", f"  image_tokens_per_image: {image_tokens_per_image}")
+            _log_pipeline("5.YIELD", f"  total_image_tokens: {total_image_tokens}")
+            _log_pipeline("5.YIELD", f"  --- Text ---")
+            _log_pipeline("5.YIELD", f"  text.shape: {np.asarray(tokens).shape}")
+            _log_pipeline("5.YIELD", f"  text nonzero tokens: {np.count_nonzero(tokens)}")
+            _log_pipeline("5.YIELD", f"  mask_ar nonzero (causal): {np.count_nonzero(mask_ar)}")
+            _log_pipeline("5.YIELD", f"  mask_loss nonzero (trainable): {np.count_nonzero(mask_loss)}")
+            _log_pipeline("5.YIELD", f"  --- Metadata ---")
+            _log_pipeline("5.YIELD", f"  input_prompt: '{full_prefix[:60]}...'")
+            _log_pipeline("5.YIELD", f"  ground_truth: '{suffix}'")
+            _log_pipeline("5.YIELD", f"  --- Total Sequence ---")
+            _log_pipeline("5.YIELD", f"  TOTAL tokens (image + text): {total_image_tokens + np.count_nonzero(tokens)}")
+            _log_pipeline("5.YIELD", "=" * 60)
+            _increment_sample_count()
 
         yield {
             'image': images,  # Shape: [num_images, H, W, 3]
@@ -720,25 +969,37 @@ def create_eval_iterator(
 
         sample = dataset.parse_sample(line.decode('utf-8'))
 
-        if not sample['images']:
-            continue
-
-        # Load and process ALL images as separate frames (NOT grid!)
-        try:
-            loaded_images = []
-            for img_path in sample['images']:
-                img = dataset.load_image(img_path)
-                loaded_images.append(img)
-
-            # Process images as separate frames [num_images, H, W, 3]
+        # Check if images are disabled via environment variable
+        disable_images = os.environ.get("DISABLE_IMAGES", "0") == "1"
+        
+        if disable_images:
+            # Skip image loading and create empty images
+            # preprocess_multi_images will handle the empty list and return num_images=0
             images, num_images = preprocess_multi_images(
-                loaded_images,
+                [],  # Empty list - will be handled by preprocess_multi_images
                 size=dataset.image_size,
                 max_images=max_images,
             )
-        except Exception as e:
-            print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
-            continue
+        else:
+            if not sample['images']:
+                continue
+
+            # Load and process ALL images as separate frames (NOT grid!)
+            try:
+                loaded_images = []
+                for img_path in sample['images']:
+                    img = dataset.load_image(img_path)
+                    loaded_images.append(img)
+
+                # Process images as separate frames [num_images, H, W, 3]
+                images, num_images = preprocess_multi_images(
+                    loaded_images,
+                    size=dataset.image_size,
+                    max_images=max_images,
+                )
+            except Exception as e:
+                print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
+                continue
 
         # Combine prompt_prefix (if any) with the actual question
         # Format: "{prompt_prefix}{actual_question}" (with space if prefix exists)
@@ -755,6 +1016,21 @@ def create_eval_iterator(
             num_images=num_images,
             image_size=dataset.image_size,
         )
+
+        # DEBUG: Check token counts for evaluation
+        if random.random() < 0.01:
+            image_tokens_per_image = get_image_token_count(dataset.image_size, patch_size=14)
+            total_image_tokens = image_tokens_per_image * num_images
+            print(f"\n[DEBUG create_eval_iterator] After preprocess_tokens:")
+            print(f"  num_images: {num_images}")
+            print(f"  image shape: {images.shape}")
+            print(f"  image_tokens_per_image: {image_tokens_per_image}")
+            print(f"  total_image_tokens: {total_image_tokens}")
+            print(f"  text tokens shape: {np.asarray(tokens).shape}")
+            print(f"  text tokens nonzero: {np.count_nonzero(tokens)}")
+            print(f"  total sequence length (image + text): {total_image_tokens + np.count_nonzero(tokens)}")
+            print(f"  sample_id: {sample['sample_id']}")
+            print(f"  prompt length: {len(full_prefix)} chars")
 
         yield {
             'image': images,  # Shape: [num_images, H, W, 3]

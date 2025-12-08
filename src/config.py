@@ -166,7 +166,24 @@ def load_config(env_file: Optional[str] = None) -> Config:
     """
     # Load .env file if provided
     if env_file:
+        # DEBUG: Log env file loading
+        import os
+        env_file_path = os.path.abspath(env_file)
+        print(f"[DEBUG config] Loading env file: {env_file_path}")
+        print(f"[DEBUG config] File exists: {os.path.exists(env_file_path)}")
+        if os.path.exists(env_file_path):
+            # Read and show GRADIENT_ACCUMULATION_STEPS value from file
+            try:
+                with open(env_file_path, 'r') as f:
+                    for line in f:
+                        if 'GRADIENT_ACCUMULATION_STEPS' in line:
+                            print(f"[DEBUG config] Found in file: {line.strip()}")
+            except Exception as e:
+                print(f"[DEBUG config] Error reading file: {e}")
         load_dotenv(env_file, override=True)
+        # Check after loading
+        env_val = os.getenv("GRADIENT_ACCUMULATION_STEPS", "NOT SET")
+        print(f"[DEBUG config] GRADIENT_ACCUMULATION_STEPS after load_dotenv: {env_val}")
     else:
         load_dotenv(override=True)
 

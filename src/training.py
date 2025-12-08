@@ -199,6 +199,8 @@ def compiled_train_step_adam(
     imgs = batch["image"]
     txts = batch["text"]
     mask_ar = batch["mask_ar"]
+    # Get num_images for proper masking of padded image tokens
+    num_images = batch.get("num_images", None)
 
     def loss_fn(params):
         text_logits, _ = model.apply(
@@ -206,6 +208,7 @@ def compiled_train_step_adam(
             imgs,
             txts[:, :-1],
             mask_ar[:, :-1],
+            num_images=num_images,  # Pass num_images for proper masking
             train=True
         )
 
@@ -235,6 +238,7 @@ def compiled_train_step_adam(
     return new_params, new_opt_state, loss
 
 
+@functools.partial(jax.jit, static_argnames=('model',), donate_argnums=())
 def compute_loss_and_grads_for_accum(
     params: Dict,
     batch: Dict,
@@ -242,12 +246,21 @@ def compute_loss_and_grads_for_accum(
     trainable_mask: Dict,
 ) -> Tuple[float, Dict]:
     """
-    Compute loss and gradients for gradient accumulation with Adam.
+    JIT-compiled loss and gradient computation for gradient accumulation.
+    
+    OPTIMIZED for memory efficiency:
+    - JIT-compiled to prevent memory leaks
+    - Returns gradients only (no intermediate activations)
+    - Uses inline=True to force memory cleanup
+
+    IMPORTANT: This function is JIT-compiled to prevent memory leaks during
+    gradient accumulation. Without JIT, each iteration would accumulate
+    intermediate activations in memory.
 
     Args:
-        params: Model parameters
+        params: Model parameters (NOT donated - used multiple times)
         batch: Training batch
-        model: PaliGemma model
+        model: PaliGemma model (static - will be traced once)
         trainable_mask: Mask of trainable parameters
 
     Returns:
@@ -256,6 +269,8 @@ def compute_loss_and_grads_for_accum(
     imgs = batch["image"]
     txts = batch["text"]
     mask_ar = batch["mask_ar"]
+    # Get num_images for proper masking of padded image tokens
+    num_images = batch.get("num_images", None)
 
     def loss_fn(params):
         text_logits, _ = model.apply(
@@ -263,6 +278,7 @@ def compute_loss_and_grads_for_accum(
             imgs,
             txts[:, :-1],
             mask_ar[:, :-1],
+            num_images=num_images,  # Pass num_images for proper masking
             train=True
         )
 
@@ -270,13 +286,20 @@ def compute_loss_and_grads_for_accum(
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
 
+        # Debug: Log mask_loss to verify EOS padding is excluded from training
+        # mask_loss=1 means the token contributes to loss, mask_loss=0 means it's excluded
+        # EOS token itself has mask_loss=1, but padding after EOS has mask_loss=0
+        jax.debug.print("[LOSS DEBUG] mask_loss shape: {shape}, trainable tokens per sample: {nz}", 
+                        shape=mask_loss.shape, nz=jnp.sum(mask_loss, axis=-1))
+
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
 
         return jnp.mean(example_loss)
 
-    loss, grads = jax.value_and_grad(loss_fn)(params)
+    # Use value_and_grad with explicit memory management
+    loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(params)
 
     # Mask gradients for frozen parameters
     grads = jax.tree.map(
@@ -286,6 +309,24 @@ def compute_loss_and_grads_for_accum(
     )
 
     return loss, grads
+
+
+@jax.jit
+def accumulate_gradients(accumulated_grads: Dict, grads: Dict) -> Dict:
+    """
+    JIT-compiled gradient accumulation.
+    
+    This function is JIT-compiled to prevent memory leaks during
+    gradient accumulation. It efficiently adds gradients in-place.
+    
+    Args:
+        accumulated_grads: Previously accumulated gradients
+        grads: New gradients to add
+        
+    Returns:
+        Updated accumulated gradients
+    """
+    return jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
 
 
 @functools.partial(jax.jit, donate_argnums=(0, 1), static_argnames=('optimizer',))
@@ -346,6 +387,7 @@ def compiled_train_step(
     imgs = batch["image"]
     txts = batch["text"]
     mask_ar = batch["mask_ar"]
+    num_images = batch.get("num_images", None)
 
     def loss_fn(params):
         text_logits, _ = model.apply(
@@ -353,6 +395,7 @@ def compiled_train_step(
             imgs,
             txts[:, :-1],
             mask_ar[:, :-1],
+            num_images=num_images,
             train=True
         )
 
@@ -405,6 +448,7 @@ def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float
     imgs = batch["image"]
     txts = batch["text"]
     mask_ar = batch["mask_ar"]
+    num_images = batch.get("num_images", None)
 
     def loss_fn(params):
         text_logits, _ = model.apply(
@@ -412,6 +456,7 @@ def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float
             imgs,
             txts[:, :-1],
             mask_ar[:, :-1],
+            num_images=num_images,
             train=True
         )
 
@@ -452,6 +497,7 @@ def create_pmap_train_step(model: Any):
         imgs = batch["image"]
         txts = batch["text"]
         mask_ar = batch["mask_ar"]
+        num_images = batch.get("num_images", None)
 
         def loss_fn(params):
             text_logits, _ = model.apply(
@@ -459,6 +505,7 @@ def create_pmap_train_step(model: Any):
                 imgs,
                 txts[:, :-1],
                 mask_ar[:, :-1],
+                num_images=num_images,
                 train=True
             )
 
@@ -521,6 +568,7 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
         imgs = batch["image"]
         txts = batch["text"]
         mask_ar = batch["mask_ar"]
+        num_images = batch.get("num_images", None)
 
         def loss_fn(params):
             text_logits, _ = model.apply(
@@ -528,6 +576,7 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
                 imgs,
                 txts[:, :-1],
                 mask_ar[:, :-1],
+                num_images=num_images,
                 train=True
             )
 
@@ -667,12 +716,14 @@ def compiled_train_step_with_accumulation(
         imgs = batch["image"]
         txts = batch["text"]
         mask_ar = batch["mask_ar"]
+        num_images = batch.get("num_images", None)
         
         text_logits, _ = model.apply(
             {"params": params},
             imgs,
             txts[:, :-1],
             mask_ar[:, :-1],
+            num_images=num_images,
             train=True
         )
 

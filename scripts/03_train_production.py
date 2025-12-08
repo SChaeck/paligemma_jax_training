@@ -50,11 +50,12 @@ from src.model import (
     prepare_params_for_training,
     save_checkpoint,
 )
-from src.data import XVRDataset, create_train_iterator, collate_batch
+from src.data import XVRDataset, create_train_iterator, collate_batch, enable_pipeline_debug, _PIPELINE_DEBUG, _log_pipeline
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step_adam,
     compute_loss_and_grads_for_accum,
+    accumulate_gradients,  # JIT-compiled gradient accumulation
     apply_accumulated_gradients_adam,
     create_optimizer,
     create_optimizer_state,
@@ -103,14 +104,10 @@ def save_training_batch(
     images_dir = os.path.join(batch_dir, "images")
     os.makedirs(images_dir, exist_ok=True)
 
-    # Unshard batch if needed
-    if batch['image'].ndim == 6:  # Sharded for pmap
-        batch_images = np.array(batch['image'][0])
-    else:
-        batch_images = np.array(batch['image'])
-
+    # CRITICAL: Use batch_samples directly to avoid image mixing issues
+    # batch may be sharded or modified, but batch_samples contains original data
     # Limit to max_samples
-    num_samples = min(len(batch_images), max_samples, len(batch_samples))
+    num_samples = min(len(batch_samples), max_samples)
 
     samples_info = []
 
@@ -132,23 +129,25 @@ def save_training_batch(
             "loss": float(loss),
         }
 
-        # Save images
-        images = batch_images[i]
+        # Save images directly from batch_samples to avoid mixing
+        # sample['image'] has shape [num_images, H, W, 3]
+        sample_images = sample.get('image', None)
         image_paths = []
-        for img_idx in range(num_images):
-            img = images[img_idx]
+        if sample_images is not None and num_images > 0:
+            for img_idx in range(num_images):
+                img = sample_images[img_idx]
 
-            # Convert to [0, 255]
-            if img.min() < 0:
-                img = ((img + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
-            elif img.max() <= 1.0:
-                img = (img * 255).clip(0, 255).astype(np.uint8)
-            else:
-                img = img.clip(0, 255).astype(np.uint8)
+                # Convert to [0, 255]
+                if img.min() < 0:
+                    img = ((img + 1.0) * 127.5).clip(0, 255).astype(np.uint8)
+                elif img.max() <= 1.0:
+                    img = (img * 255).clip(0, 255).astype(np.uint8)
+                else:
+                    img = img.clip(0, 255).astype(np.uint8)
 
-            img_path = os.path.join(images_dir, f"sample_{i:02d}_image_{img_idx}.png")
-            PIL.Image.fromarray(img).save(img_path)
-            image_paths.append(f"images/sample_{i:02d}_image_{img_idx}.png")
+                img_path = os.path.join(images_dir, f"sample_{i:02d}_image_{img_idx}.png")
+                PIL.Image.fromarray(img).save(img_path)
+                image_paths.append(f"images/sample_{i:02d}_image_{img_idx}.png")
 
         sample_info["image_paths"] = image_paths
         samples_info.append(sample_info)
@@ -170,7 +169,29 @@ def save_training_batch(
 
 def setup_environment(config):
     """Setup environment variables and JAX configuration."""
+    # IMPORTANT: Disable pre-allocation to avoid memory fragmentation
+    # JAX by default pre-allocates 90% of GPU memory, which can cause OOM
+    # when large contiguous blocks are needed during training.
+    os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(config.system.xla_mem_fraction)
+    
+    # CRITICAL: Enable memory pool to allow reuse of memory
+    # This allows JAX to reuse memory from accumulated_grads for forward pass
+    # Without this, JAX tries to allocate new memory even if old memory can be reused
+    os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"  # Use platform allocator for better memory reuse
+    
+    # Model debug flags (for big_vision model logging)
+    # Set MODEL_DEBUG_EMBEDDING=1 to log embedding details
+    # Set MODEL_DEBUG_FORWARD=1 to log forward pass details
+    if os.environ.get("MODEL_DEBUG_EMBEDDING", "0") == "1":
+        print("  [MODEL DEBUG] Embedding logging enabled")
+    if os.environ.get("MODEL_DEBUG_FORWARD", "0") == "1":
+        print("  [MODEL DEBUG] Forward pass logging enabled")
+    
+    # Data pipeline flags
+    # Set DISABLE_IMAGES=1 to train without images (text-only training)
+    if os.environ.get("DISABLE_IMAGES", "0") == "1":
+        print("  [DATA] DISABLE_IMAGES=1: Training without images (text-only mode)")
 
     if config.system.tf_allow_growth:
         os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] = "true"
@@ -406,15 +427,26 @@ def train_production(config):
     # Load Model
     # ==========================================================================
     print_banner("Step 1: Loading Model")
-
+    
+    # Helper function to print GPU memory
+    def print_gpu_memory(stage):
+        import subprocess
+        result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free', '--format=csv,noheader,nounits'], capture_output=True, text=True)
+        used, free = result.stdout.strip().split(', ')
+        print(f'  [GPU Memory] {stage}: {int(used)//1024}GB used, {int(free)//1024}GB free')
+    
+    print_gpu_memory("Before model loading")
     model, params, tokenizer, decode_fn = load_paligemma_model(config)
+    print_gpu_memory("After model loading")
 
     trainable_mask = create_trainable_mask(
         params,
         strategy=config.training.trainable_params,
         config=config,
     )
+    print_gpu_memory("After trainable mask")
     params = prepare_params_for_training(params, trainable_mask, config)
+    print_gpu_memory("After params preparation")
 
     # ==========================================================================
     # Prepare Data
@@ -458,23 +490,51 @@ def train_production(config):
 
     # Account for gradient accumulation in step calculation
     effective_batch_size = config.training.batch_size * config.training.gradient_accumulation_steps
-    steps_per_epoch = train_dataset.num_samples // effective_batch_size
-    total_steps = steps_per_epoch * config.training.num_epochs
+    effective_steps_per_epoch = train_dataset.num_samples // effective_batch_size
+    total_effective_steps = effective_steps_per_epoch * config.training.num_epochs
+    
+    # Actual steps (number of batches to process) = effective_steps * accum_steps
+    # This is what the loop will actually iterate over
+    actual_steps_per_epoch = train_dataset.num_samples // config.training.batch_size
+    total_steps = actual_steps_per_epoch * config.training.num_epochs
 
     print(f"  Epochs: {config.training.num_epochs}")
     print(f"  Batch size: {config.training.batch_size}")
+    print(f"  Max images per sample: {config.training.max_images}")
     print(f"  Gradient accumulation steps: {config.training.gradient_accumulation_steps}")
     print(f"  Effective batch size: {effective_batch_size}")
-    print(f"  Steps per epoch: {steps_per_epoch}")
-    print(f"  Total steps: {total_steps}")
+    
+    # Warn if gradient accumulation is not being used
+    if config.training.gradient_accumulation_steps == 1:
+        print(f"  ⚠️  WARNING: Gradient accumulation is disabled (steps=1)")
+        print(f"     Consider setting GRADIENT_ACCUMULATION_STEPS > 1 to increase effective batch size")
+    else:
+        print(f"  ✅ Gradient accumulation enabled: {config.training.gradient_accumulation_steps} steps")
+        print(f"     This allows using smaller batch_size ({config.training.batch_size}) while")
+        print(f"     maintaining effective batch size of {effective_batch_size}")
+    # Estimate memory usage
+    # Each image: 224x224x3 = 150KB (float32) or 75KB (float16)
+    # With 6 images per sample and batch_size=8: 8 * 6 * 150KB = 7.2MB just for images
+    # But with gradients and activations, memory usage is much higher
+    estimated_memory_per_batch_gb = (config.training.batch_size * config.training.max_images * 224 * 224 * 3 * 4) / (1024**3) * 10  # Rough estimate
+    print(f"  [WARNING] Estimated memory per batch: ~{estimated_memory_per_batch_gb:.2f}GB (rough estimate)")
+    # DEBUG: Verify gradient accumulation is set correctly
+    env_val = os.getenv("GRADIENT_ACCUMULATION_STEPS", "NOT SET")
+    print(f"  [DEBUG] GRADIENT_ACCUMULATION_STEPS env var: {env_val}")
+    print(f"  [DEBUG] config.training.gradient_accumulation_steps: {config.training.gradient_accumulation_steps}")
+    print(f"  Effective steps per epoch: {effective_steps_per_epoch} (update steps)")
+    print(f"  Actual steps per epoch: {actual_steps_per_epoch} (batch processing steps)")
+    print(f"  Total effective steps: {total_effective_steps} (total updates)")
+    print(f"  Total actual steps: {total_steps} (total batches to process)")
     print(f"  Learning rate: {config.training.learning_rate}")
     print(f"  Optimizer: AdamW")
-    print(f"  Estimated time: ~{total_steps * 0.25 / 60:.1f} minutes")
+    print(f"  Estimated time: ~{total_steps * 0.25 / 60:.1f} minutes (based on actual steps)")
 
     # Create AdamW optimizer with warmup + cosine decay (matches paligemma2 PyTorch)
+    # Use effective_steps for optimizer (number of actual updates)
     optimizer = create_optimizer(
         learning_rate=config.training.learning_rate,
-        total_steps=total_steps,
+        total_steps=total_effective_steps,  # Use effective steps for LR schedule
         warmup_percent=config.training.warmup_percent,
         weight_decay=0.0,  # No weight decay for fine-tuning
         max_grad_norm=config.training.max_grad_norm,
@@ -483,7 +543,7 @@ def train_production(config):
     # Keep lr_schedule for logging purposes only
     lr_schedule = create_learning_rate_schedule(
         base_learning_rate=config.training.learning_rate,
-        total_steps=total_steps,
+        total_steps=total_effective_steps,  # Use effective steps for LR schedule
         warmup_percent=config.training.warmup_percent,
         schedule_type=config.training.lr_schedule,
         config=config,
@@ -520,16 +580,19 @@ def train_production(config):
         print(f"  Replication complete")
     else:
         print(f"\n[Single-GPU] Using jit compiled training with Adam optimizer")
+        print_gpu_memory("Before params device_put")
 
         # Move params to single GPU (avoid device mismatch)
         first_device = jax.devices()[0]
         params = jax.device_put(params, first_device)
+        print_gpu_memory("After params device_put")
         trainable_mask = jax.device_put(trainable_mask, first_device)
         print(f"  Moved params to single GPU: {first_device}")
 
         # Initialize optimizer state after moving params
         opt_state = create_optimizer_state(optimizer, params)
         print(f"  Optimizer state initialized")
+        print_gpu_memory("After optimizer state init")
 
         data_sharding = create_data_sharding(config)
 
@@ -538,13 +601,92 @@ def train_production(config):
     # ==========================================================================
     print_banner("Step 4: Training")
 
-    print("Starting production training...\n")
+    print("Starting production training...")
+    print_gpu_memory("Before training loop")
+    
+    # Enable pipeline debugging for first few samples if DEBUG mode
+    if os.environ.get("DATA_PIPELINE_DEBUG", "0") == "1":
+        enable_pipeline_debug(max_samples=3)
+        print("\n[PIPELINE DEBUG] Enabled - will log first 3 samples in detail\n")
+        
+        # Debug: Check embedding generation with a test batch
+        print("\n[EMBEDDING DEBUG] Checking embedding generation...")
+        test_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
+        test_batch = collate_batch(
+            test_samples,
+            max_images=config.training.max_images,
+            image_size=config.model.img_size,
+        )
+        test_batch = shard_batch(test_batch, data_sharding, config)
+        
+        # Run model without training to check embeddings
+        test_imgs = test_batch["image"]
+        test_txts = test_batch["text"]
+        test_mask_ar = test_batch["mask_ar"]
+        test_num_images = test_batch.get("num_images", None)
+        
+        print(f"  Input shapes:")
+        print(f"    images: {test_imgs.shape}")
+        print(f"    text: {test_txts.shape}")
+        print(f"    mask_ar: {test_mask_ar.shape}")
+        print(f"    num_images: {test_num_images}")
+        
+        # Get model output with auxiliary info
+        text_logits, out = model.apply(
+            {"params": params},
+            test_imgs,
+            test_txts[:, :-1],
+            test_mask_ar[:, :-1],
+            num_images=test_num_images,
+            train=False
+        )
+        
+        print(f"  Output shapes:")
+        print(f"    text_logits: {text_logits.shape}")
+        if "img/zimg" in out:
+            zimg = out["img/zimg"]
+            print(f"    image_embedding (zimg): {zimg.shape}")
+            print(f"      -> {zimg.shape[1]} image tokens per sample")
+            print(f"      -> {zimg.shape[1] // 256} images worth of tokens")
+        
+        # Check if input_mask is properly set for padded images
+        if "attn_mask" in out:
+            attn_mask = out["attn_mask"]
+            print(f"  Attention mask check:")
+            print(f"    attn_mask shape: {attn_mask.shape}")
+            # Check mask for each sample
+            for i in range(min(2, len(test_num_images))):
+                num_imgs = test_num_images[i]
+                valid_img_tokens = num_imgs * 256
+                total_img_tokens = 6 * 256  # max_images * tokens_per_image
+                # The attention mask should have False for padded image tokens
+                print(f"    Sample {i}: {num_imgs} images")
+                print(f"      -> Expected: {valid_img_tokens} valid, {total_img_tokens - valid_img_tokens} masked")
+        print(f"  Expected:")
+        print(f"    text_logits should be [{test_imgs.shape[0]}, {test_txts.shape[1]-1}, vocab_size]")
+        if test_num_images is not None:
+            for i in range(min(2, len(test_num_images))):
+                print(f"    Sample {i}: {test_num_images[i]} images -> {test_num_images[i] * 256} valid image tokens")
+        print("[EMBEDDING DEBUG] Done\n")
+        
+        # Recreate iterator since we consumed some samples
+        train_iterator = create_train_iterator(
+            train_dataset,
+            batch_size=config.training.batch_size,
+            prompt_prefix=config.data.prompt_prefix,
+            max_images=config.training.max_images,
+        )
+    
+    print("")
     start_time = time.time()
 
-    # Gradient accumulation: collect multiple batches before updating
+    # Gradient accumulation: process batches one at a time and accumulate gradients
+    # This avoids storing all batches in memory at once
     accum_steps = config.training.gradient_accumulation_steps
-    accum_batches = []
     effective_step = 0
+    accum_counter = 0  # Counter for current accumulation
+    accumulated_grads = None
+    accumulated_loss = 0.0
 
     for step in range(1, total_steps + 1):
         step_start = time.time()
@@ -557,6 +699,55 @@ def train_production(config):
             max_images=config.training.max_images,
             image_size=config.model.img_size,
         )
+        
+        # Validate batch images match original samples (if enabled)
+        # Set VALIDATE_BATCH_IMAGES=1 in environment to enable
+        if os.environ.get("VALIDATE_BATCH_IMAGES", "0") == "1":
+            from src.data import _validate_batch_images
+            _validate_batch_images(
+                batch['image'],
+                batch_samples,
+                batch['num_images'],
+                config.training.max_images,
+            )
+
+        # DEBUG: Log batch information (occasionally)
+        import random
+        if step % 100 == 0 and random.random() < 0.1:  # Every 100 steps, 10% chance
+            from src.data import get_image_token_count
+            print(f"\n[DEBUG training loop] Step {step}:")
+            print(f"  batch['image'].shape: {batch['image'].shape}")  # [B, T, H, W, 3]
+            print(f"  batch['text'].shape: {batch['text'].shape}")  # [B, seq_len]
+            print(f"  batch['num_images']: {batch['num_images']}")  # [B] actual image counts
+            image_tokens_per_image = get_image_token_count(config.model.img_size, patch_size=14)
+            for i in range(min(3, len(batch['num_images']))):  # Show first 3 samples
+                num_imgs = batch['num_images'][i]
+                total_img_tokens = image_tokens_per_image * num_imgs
+                text_tokens = np.count_nonzero(batch['text'][i])
+                total_tokens = total_img_tokens + text_tokens
+                print(f"  Sample {i}: {num_imgs} images -> {total_img_tokens} img tokens + {text_tokens} text tokens = {total_tokens} total")
+
+        # Save training batch BEFORE sharding (to avoid image mixing issues)
+        # This ensures batch and batch_samples are from the same iteration
+        if step % config.logging.log_every == 0:
+            try:
+                # Create a copy of batch before sharding for saving
+                batch_for_save = {
+                    'image': batch['image'].copy(),  # Copy to avoid reference issues
+                    'num_images': batch['num_images'].copy(),
+                }
+                save_training_batch(
+                    batch=batch_for_save,
+                    batch_samples=batch_samples,
+                    step=step,
+                    loss=0.0,
+                    decode_fn=decode_fn,
+                    tokenizer=tokenizer,
+                    output_dir=config.checkpoint_dir,
+                    max_samples=4,
+                )
+            except Exception as e:
+                print(f"  Warning: Failed to save training batch: {e}")
 
         # Shard batch based on single/multi GPU mode
         if use_pmap:
@@ -564,88 +755,168 @@ def train_production(config):
         else:
             batch = shard_batch(batch, data_sharding, config)
 
-        accum_batches.append(batch)
+        # Pipeline logging - after sharding
+        if _PIPELINE_DEBUG and step <= 13:
+            _log_pipeline("7.SHARD", "=" * 60)
+            _log_pipeline("7.SHARD", f"Step {step}: Batch after sharding")
+            _log_pipeline("7.SHARD", f"  batch['image'].shape: {batch['image'].shape}")
+            _log_pipeline("7.SHARD", f"  batch['text'].shape: {batch['text'].shape}")
+            _log_pipeline("7.SHARD", f"  batch['mask_ar'].shape: {batch['mask_ar'].shape}")
+            _log_pipeline("7.SHARD", f"  batch['mask_loss'].shape: {batch['mask_loss'].shape}")
+            _log_pipeline("7.SHARD", f"  batch['num_images']: {batch['num_images']}")
+            
+            # Check each sample in batch
+            for b_idx in range(min(2, batch['image'].shape[0])):
+                num_imgs = batch['num_images'][b_idx]
+                text_nonzero = np.count_nonzero(batch['text'][b_idx])
+                loss_nonzero = np.count_nonzero(batch['mask_loss'][b_idx])
+                _log_pipeline("7.SHARD", f"  Batch item {b_idx}: {num_imgs} images, {text_nonzero} text tokens, {loss_nonzero} loss tokens")
+            _log_pipeline("7.SHARD", "=" * 60)
 
-        # Only update when we have accumulated enough batches
-        should_update = len(accum_batches) >= accum_steps or step == total_steps
+        # Process batch and accumulate gradients (memory efficient)
+        accum_counter += 1
         
-        if should_update:
-            effective_step += 1
-            # Get learning rate for logging (optimizer handles schedule internally)
-            lr = lr_schedule(effective_step)
-
-            # Save training batch BEFORE training (every log_every steps)
-            # This shows exactly what the model sees as input
-            if step % config.logging.log_every == 0:
-                try:
-                    save_training_batch(
-                        batch=accum_batches[0],  # Save first accumulated batch
-                        batch_samples=batch_samples,  # Original samples with metadata
-                        step=step,
-                        loss=0.0,  # Will be updated after training
-                        decode_fn=decode_fn,
-                        tokenizer=tokenizer,
-                        output_dir=config.checkpoint_dir,
-                        max_samples=4,
-                    )
-                except Exception as e:
-                    print(f"  Warning: Failed to save training batch: {e}")
-
-            # Training step with Adam optimizer
-            if use_pmap:
-                # Multi-GPU with pmap
-                if accum_steps == 1:
-                    # Direct pmap update (no gradient accumulation)
-                    params, opt_state, loss = pmap_train_step(
-                        params, opt_state, accum_batches[0], trainable_mask
-                    )
-                    # Loss is same on all devices, take first
-                    loss = loss[0]
-                else:
-                    # Gradient accumulation with pmap - NOT RECOMMENDED
-                    # For simplicity with pmap, use gradient_accumulation_steps=1
-                    raise NotImplementedError(
-                        "Gradient accumulation with pmap is not yet supported. "
-                        "Please set GRADIENT_ACCUMULATION_STEPS=1 or USE_PMAP=false"
-                    )
+        # DEBUG: Log accumulation status
+        if step % 10 == 0 or accum_counter >= accum_steps:
+            should_update = accum_counter >= accum_steps or step == total_steps
+            print(f"[DEBUG accum] step={step}, accum_counter={accum_counter}/{accum_steps}, should_update={should_update}")
+            if accum_steps > 1 and accum_counter == 1:
+                print(f"  ✅ Gradient accumulation active: will accumulate {accum_steps} batches before update")
+        
+        # Compute loss and gradients for this batch
+        if use_pmap:
+            # Multi-GPU: can't do gradient accumulation easily, so use single batch
+            if accum_steps == 1:
+                effective_step += 1
+                lr = lr_schedule(effective_step)
+                
+                # Note: save_training_batch is called before shard_batch (see line 735-750)
+                # to avoid image mixing issues with sharded batches
+                
+                params, opt_state, loss = pmap_train_step(
+                    params, opt_state, batch, trainable_mask
+                )
+                loss = loss[0]
+                accum_counter = 0
             else:
-                # Single-GPU path
-                if accum_steps > 1 and len(accum_batches) > 1:
-                    # Gradient accumulation with Adam
+                raise NotImplementedError(
+                    "Gradient accumulation with pmap is not yet supported. "
+                    "Please set GRADIENT_ACCUMULATION_STEPS=1 or USE_PMAP=false"
+                )
+        else:
+            # Single-GPU: accumulate gradients
+            if accum_steps > 1:
+                # Compute gradients for this batch (JIT-compiled)
+                # JAX's memory pool should allow reuse of accumulated_grads memory for forward pass
+                # If this still causes OOM, we'll need to use CPU offloading
+                loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
+                
+                # Convert loss to Python float immediately to free JAX array memory
+                loss_float = float(jax.device_get(loss))
+                accumulated_loss += loss_float
+                
+                # Accumulate gradients on GPU using JIT-compiled function
+                # This is fast because everything stays on GPU
+                if accumulated_grads is None:
+                    accumulated_grads = grads
+                else:
+                    # Use JIT-compiled accumulation (GPU-to-GPU, very fast)
+                    accumulated_grads = accumulate_gradients(accumulated_grads, grads)
+                
+                # Explicitly free gradient memory (JAX will handle this, but being explicit helps)
+                del grads
+                del loss
+                
+                # Force garbage collection periodically to help JAX free memory
+                # Only do this every few steps to avoid overhead
+                if accum_counter % 4 == 0:
+                    import gc
+                    gc.collect()
+                
+                # Check if we should update
+                should_update = accum_counter >= accum_steps or step == total_steps
+                
+                if should_update:
+                    effective_step += 1
+                    lr = lr_schedule(effective_step)
+                    
+                    # Note: save_training_batch is called before shard_batch (see line 735-750)
+                    # to avoid image mixing issues with sharded batches
+                    
+                    # Apply accumulated gradients with Adam
+                    # accumulated_grads is already on GPU, so no transfer needed
+                    params, opt_state = apply_accumulated_gradients_adam(
+                        params, opt_state, accumulated_grads, optimizer, accum_counter
+                    )
+                    loss = accumulated_loss / accum_counter
+                    
+                    # Explicitly free accumulated gradients
+                    del accumulated_grads
                     accumulated_grads = None
                     accumulated_loss = 0.0
-
-                    for batch in accum_batches:
-                        loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
-                        accumulated_loss += loss
-                        if accumulated_grads is None:
-                            accumulated_grads = grads
-                        else:
-                            accumulated_grads = jax.tree.map(lambda x, y: x + y, accumulated_grads, grads)
-
-                    # Apply accumulated gradients with Adam
-                    params, opt_state = apply_accumulated_gradients_adam(
-                        params, opt_state, accumulated_grads, optimizer, len(accum_batches)
-                    )
-                    loss = accumulated_loss / len(accum_batches)
+                    accum_counter = 0
+                    
+                    # Force garbage collection after update
+                    import gc
+                    gc.collect()
                 else:
-                    # Use Adam optimizer for single-step updates
-                    params, opt_state, loss = compiled_train_step_adam(
-                        params,
-                        opt_state,
-                        accum_batches[0],
-                        model,
-                        optimizer,
-                        trainable_mask,
-                    )
-
-            # Reset accumulation
-            accum_batches = []
-        else:
-            # Still accumulating, skip logging but continue loop
-            continue
+                    # Still accumulating, skip the rest of the loop
+                    # (loss logging happens only after update)
+                    continue
+            else:
+                # Single-step update (no accumulation)
+                effective_step += 1
+                lr = lr_schedule(effective_step)
+                
+                # Note: save_training_batch is called before shard_batch (see line 735-750)
+                # to avoid image mixing issues with sharded batches
+                
+                params, opt_state, loss = compiled_train_step_adam(
+                    params,
+                    opt_state,
+                    batch,
+                    model,
+                    optimizer,
+                    trainable_mask,
+                )
 
         loss = float(jax.device_get(loss))
+        
+        # Pipeline logging - after training step
+        if _PIPELINE_DEBUG and step <= 13:
+            _log_pipeline("8.TRAIN", "=" * 60)
+            _log_pipeline("8.TRAIN", f"Step {step}: Training step complete")
+            _log_pipeline("8.TRAIN", f"  Loss: {loss:.6f}")
+            _log_pipeline("8.TRAIN", f"  Learning rate: {lr:.2e}")
+            _log_pipeline("8.TRAIN", f"  Effective step: {effective_step}")
+            
+            # Detailed loss breakdown for understanding
+            _log_pipeline("8.TRAIN", f"  --- Loss Calculation Breakdown ---")
+            _log_pipeline("8.TRAIN", f"  batch['image'].shape: {batch['image'].shape}")
+            _log_pipeline("8.TRAIN", f"  batch['text'].shape: {batch['text'].shape}")
+            _log_pipeline("8.TRAIN", f"  batch['num_images']: {batch['num_images']}")
+            
+            # Show mask_loss details per sample
+            for b_idx in range(min(2, len(batch['num_images']))):
+                num_imgs = batch['num_images'][b_idx]
+                mask_loss_nonzero = np.count_nonzero(batch['mask_loss'][b_idx])
+                text_nonzero = np.count_nonzero(batch['text'][b_idx])
+                
+                # Calculate expected token counts
+                img_tokens = num_imgs * 256  # 256 tokens per image
+                _log_pipeline("8.TRAIN", f"  Sample {b_idx}:")
+                _log_pipeline("8.TRAIN", f"    num_images: {num_imgs} -> {img_tokens} image tokens")
+                _log_pipeline("8.TRAIN", f"    text tokens (nonzero): {text_nonzero}")
+                _log_pipeline("8.TRAIN", f"    mask_loss nonzero (trainable): {mask_loss_nonzero}")
+                _log_pipeline("8.TRAIN", f"    total sequence: {img_tokens} + {text_nonzero} = {img_tokens + text_nonzero} tokens")
+            
+            _log_pipeline("8.TRAIN", f"  --- Expected Behavior ---")
+            _log_pipeline("8.TRAIN", f"  - Image tokens: NOT trained (mask_loss=0)")
+            _log_pipeline("8.TRAIN", f"  - Prefix text: NOT trained (mask_loss=0)")
+            _log_pipeline("8.TRAIN", f"  - Answer tokens: TRAINED (mask_loss=1)")
+            _log_pipeline("8.TRAIN", f"  - Loss is computed ONLY on answer tokens ({np.sum(batch['mask_loss'])} total)")
+            _log_pipeline("8.TRAIN", "=" * 60)
+            _log_pipeline("8.TRAIN", "")
         step_time = time.time() - step_start
 
         metrics_tracker.update({
@@ -663,15 +934,17 @@ def train_production(config):
 
         # Log progress
         if step % config.logging.log_every == 0:
-            epoch = step // steps_per_epoch + 1
+            # Calculate epoch based on actual steps
+            epoch = step // actual_steps_per_epoch + 1
             elapsed = time.time() - start_time
             eta = elapsed / step * (total_steps - step)
-
+            
+            # Show both actual step and effective step
             print(
-                f"Step {step:5d}/{total_steps} | "
+                f"Step {step:5d}/{total_steps} (effective: {effective_step:5d}/{total_effective_steps}) | "
                 f"Epoch {epoch:2d}/{config.training.num_epochs} | "
                 f"Loss: {loss:.4f} | "
-                f"LR: {lr:.6f} | "
+                f"LR: {lr:.2e} | "  # Use scientific notation for very small LR
                 f"ETA: {eta/60:.1f}min"
             )
 
@@ -733,16 +1006,18 @@ def train_production(config):
                 keep_last_n=config.logging.max_checkpoints_to_keep,
             )
 
-        # Epoch boundary
-        if step % steps_per_epoch == 0:
-            epoch = step // steps_per_epoch
+        # Epoch boundary (based on actual steps)
+        if step % actual_steps_per_epoch == 0:
+            epoch = step // actual_steps_per_epoch
             epoch_summary = metrics_tracker.compute_epoch_summary()
 
             print(f"\n{'='*80}")
             print(f"Completed Epoch {epoch}/{config.training.num_epochs}")
+            print(f"  Actual steps processed: {step}")
+            print(f"  Effective updates: {effective_step}")
             if 'loss_mean' in epoch_summary:
                 print(f"  Average Loss: {epoch_summary['loss_mean']:.4f}")
-            print(f"  Best Accuracy: {best_accuracy:.2%} (step {best_step})")
+            print(f"  Best Accuracy: {best_accuracy:.2%} (effective step {best_step})")
             print(f"{'='*80}\n")
 
             metrics_tracker.reset_epoch()
@@ -774,7 +1049,7 @@ def train_production(config):
 
     final_path = save_checkpoint(
         final_params,
-        total_steps,
+        total_effective_steps,  # Use effective step for checkpoint naming
         config.checkpoint_dir,
         config,
         keep_last_n=config.logging.max_checkpoints_to_keep,
@@ -799,10 +1074,11 @@ def train_production(config):
         "experiment_name": config.experiment_name,
         "timestamp": timestamp,
         "total_time_minutes": total_time / 60,
-        "total_steps": total_steps,
+        "total_actual_steps": total_steps,  # Number of batches processed
+        "total_effective_steps": total_effective_steps,  # Number of parameter updates
         "final_accuracy": final_metrics['accuracy'],
         "best_accuracy": best_accuracy,
-        "best_step": best_step,
+        "best_step": best_step,  # Effective step
         "final_checkpoint": final_path,
     }
     summary_path = os.path.join(config.logging.output_dir, f"summary_{timestamp}.json")
