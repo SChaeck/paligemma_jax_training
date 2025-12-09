@@ -212,6 +212,10 @@ def compiled_train_step_adam(
             train=True
         )
 
+        # Clip logits to prevent numerical instability
+        text_logits = jnp.clip(text_logits, -1e4, 1e4)
+        text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
         logp = jax.nn.log_softmax(text_logits, axis=-1)
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -219,6 +223,7 @@ def compiled_train_step_adam(
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+        example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
         return jnp.mean(example_loss)
 
@@ -273,7 +278,7 @@ def compute_loss_and_grads_for_accum(
     num_images = batch.get("num_images", None)
 
     def loss_fn(params):
-        text_logits, _ = model.apply(
+        text_logits, out = model.apply(
             {"params": params},
             imgs,
             txts[:, :-1],
@@ -282,6 +287,12 @@ def compute_loss_and_grads_for_accum(
             train=True
         )
 
+        # Clip logits to prevent numerical instability in log_softmax
+        # Large logits can cause overflow/NaN in bfloat16
+        text_logits = jnp.clip(text_logits, -1e4, 1e4)
+        # Replace any NaN in logits with 0
+        text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
         logp = jax.nn.log_softmax(text_logits, axis=-1)
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -289,17 +300,82 @@ def compute_loss_and_grads_for_accum(
         # Debug: Log mask_loss to verify EOS padding is excluded from training
         # mask_loss=1 means the token contributes to loss, mask_loss=0 means it's excluded
         # EOS token itself has mask_loss=1, but padding after EOS has mask_loss=0
-        jax.debug.print("[LOSS DEBUG] mask_loss shape: {shape}, trainable tokens per sample: {nz}", 
-                        shape=mask_loss.shape, nz=jnp.sum(mask_loss, axis=-1))
+        # Only print if DEBUG_TRAINING is enabled to avoid performance impact
+        import os
+        if os.environ.get("DEBUG_TRAINING", "0") == "1":
+            jax.debug.print("[LOSS DEBUG] mask_loss shape: {shape}, trainable tokens per sample: {nz}",
+                            shape=mask_loss.shape, nz=jnp.sum(mask_loss, axis=-1))
+
+        # Debug attention mask (controlled by DEBUG_TRAINING env var)
+        if os.environ.get("DEBUG_TRAINING", "0") == "1":
+            attn_mask = out.get("attn_mask", None)
+            # Use jax.lax.cond to avoid boolean conversion error in JIT
+            def check_attention():
+                # Find positions with mask_loss=1 (trainable tokens)
+                trainable_mask_sample = mask_loss[0] > 0  # First sample
+                # Get first trainable position
+                trainable_pos = jnp.argmax(trainable_mask_sample.astype(jnp.int32))
+                # Image tokens are at the beginning
+                img_tokens = out["img/zimg"].shape[1]
+                # Check if this trainable token can attend to image tokens
+                # Add img_tokens to attn_mask index to get text token position
+                text_token_pos = img_tokens + trainable_pos
+                can_attend_to_imgs = attn_mask[0, text_token_pos, :img_tokens]
+                attend_ratio = jnp.mean(can_attend_to_imgs.astype(jnp.float32))
+
+                # Print without format specifiers (JAX doesn't support them in traced values)
+                jax.debug.print("[ATTN DEBUG] Trainable text token at pos {text_pos} (offset {offset}) can attend to ratio={ratio} of {n} image tokens",
+                              text_pos=text_token_pos, offset=trainable_pos, ratio=attend_ratio, n=img_tokens)
+
+                # Debug: Check which image tokens are masked
+                # Count how many True values in the attention pattern
+                num_can_attend = jnp.sum(can_attend_to_imgs.astype(jnp.int32))
+                jax.debug.print("[ATTN DEBUG] Details: {valid} valid out of {total} image tokens (expected based on num_images)",
+                              valid=num_can_attend, total=img_tokens)
+
+                # Debug: Check the actual input_mask for image tokens
+                # We need to understand the masking pattern
+                # Let's check every 256th position (start of each image)
+                def check_image_boundaries():
+                    tokens_per_img = 256  # Standard PaliGemma: 224x224 / 14x14 = 16x16 = 256
+                    # Check first token of each potential image
+                    for i in range(6):  # Check up to 6 images
+                        img_start = i * tokens_per_img
+                        if img_start < img_tokens:
+                            can_attend_first = can_attend_to_imgs[img_start]
+                            jax.debug.print("[ATTN DEBUG]   Image {i}: first token at pos {pos} is accessible={acc}",
+                                          i=i, pos=img_start, acc=can_attend_first)
+                    return None
+
+                check_image_boundaries()
+
+                # Use jax.lax.cond instead of if
+                jax.lax.cond(
+                    attend_ratio < 0.5,
+                    lambda: jax.debug.print("[ATTN DEBUG] ⚠️  WARNING: Trainable tokens have limited access to images!"),
+                    lambda: None
+                )
+                return attend_ratio
+
+            # Only check if attn_mask exists
+            if attn_mask is not None:
+                check_attention()
 
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
 
-        return jnp.mean(example_loss)
+        # Clip loss to prevent extreme values that can cause NaN in gradients
+        # Loss values > 100 are almost certainly numerical errors
+        example_loss = jnp.clip(example_loss, 0.0, 100.0)
+
+        return jnp.mean(example_loss), out
 
     # Use value_and_grad with explicit memory management
-    loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(params)
+    (loss, out), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+
+    # Replace NaN in gradients with 0 to prevent NaN propagation
+    grads = jax.tree.map(lambda g: jnp.where(jnp.isnan(g), 0.0, g), grads)
 
     # Mask gradients for frozen parameters
     grads = jax.tree.map(
@@ -307,6 +383,9 @@ def compute_loss_and_grads_for_accum(
         grads,
         trainable_mask
     )
+
+    # Replace NaN loss with a large value (will be clipped)
+    loss = jnp.where(jnp.isnan(loss), 100.0, loss)
 
     return loss, grads
 
@@ -399,6 +478,10 @@ def compiled_train_step(
             train=True
         )
 
+        # Clip logits to prevent numerical instability
+        text_logits = jnp.clip(text_logits, -1e4, 1e4)
+        text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
         logp = jax.nn.log_softmax(text_logits, axis=-1)
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -406,6 +489,7 @@ def compiled_train_step(
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+        example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
         return jnp.mean(example_loss)
 
@@ -460,6 +544,10 @@ def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float
             train=True
         )
 
+        # Clip logits to prevent numerical instability
+        text_logits = jnp.clip(text_logits, -1e4, 1e4)
+        text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
         logp = jax.nn.log_softmax(text_logits, axis=-1)
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -467,6 +555,7 @@ def compute_loss_and_grads(params: Dict, batch: Dict, model: Any) -> Tuple[float
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+        example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
         return jnp.mean(example_loss)
 
@@ -509,6 +598,10 @@ def create_pmap_train_step(model: Any):
                 train=True
             )
 
+            # Clip logits to prevent numerical instability
+            text_logits = jnp.clip(text_logits, -1e4, 1e4)
+            text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
             logp = jax.nn.log_softmax(text_logits, axis=-1)
             mask_loss = batch["mask_loss"][:, 1:]
             targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -516,6 +609,7 @@ def create_pmap_train_step(model: Any):
             token_pplx = jnp.sum(logp * targets, axis=-1)
             example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
             example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+            example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
             return jnp.mean(example_loss)
 
@@ -580,6 +674,10 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
                 train=True
             )
 
+            # Clip logits to prevent numerical instability
+            text_logits = jnp.clip(text_logits, -1e4, 1e4)
+            text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
             logp = jax.nn.log_softmax(text_logits, axis=-1)
             mask_loss = batch["mask_loss"][:, 1:]
             targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -587,6 +685,7 @@ def create_pmap_train_step_adam(model: Any, optimizer: optax.GradientTransformat
             token_pplx = jnp.sum(logp * targets, axis=-1)
             example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
             example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+            example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
             return jnp.mean(example_loss)
 
@@ -727,6 +826,10 @@ def compiled_train_step_with_accumulation(
             train=True
         )
 
+        # Clip logits to prevent numerical instability
+        text_logits = jnp.clip(text_logits, -1e4, 1e4)
+        text_logits = jnp.where(jnp.isnan(text_logits), 0.0, text_logits)
+
         logp = jax.nn.log_softmax(text_logits, axis=-1)
         mask_loss = batch["mask_loss"][:, 1:]
         targets = jax.nn.one_hot(txts[:, 1:], text_logits.shape[-1])
@@ -734,13 +837,14 @@ def compiled_train_step_with_accumulation(
         token_pplx = jnp.sum(logp * targets, axis=-1)
         example_loss = -jnp.sum(token_pplx * mask_loss, axis=-1)
         example_loss /= jnp.clip(jnp.sum(mask_loss, -1), 1)
+        example_loss = jnp.clip(example_loss, 0.0, 100.0)
 
         return jnp.mean(example_loss)
 
     # Accumulate gradients over all batches
     total_loss = 0.0
     accumulated_grads = None
-    
+
     for batch in batches:
         loss, grads = jax.value_and_grad(loss_fn, has_aux=False)(params, batch)
         total_loss += loss

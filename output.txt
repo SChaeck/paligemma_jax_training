@@ -1,0 +1,980 @@
+2025-12-08 10:36:37.530215: E external/local_xla/xla/stream_executor/cuda/cuda_dnn.cc:9261] Unable to register cuDNN factory: Attempting to register factory for plugin cuDNN when one has already been registered
+2025-12-08 10:36:37.530616: E external/local_xla/xla/stream_executor/cuda/cuda_fft.cc:607] Unable to register cuFFT factory: Attempting to register factory for plugin cuFFT when one has already been registered
+2025-12-08 10:36:37.532036: E external/local_xla/xla/stream_executor/cuda/cuda_blas.cc:1515] Unable to register cuBLAS factory: Attempting to register factory for plugin cuBLAS when one has already been registered
+2025-12-08 10:36:38.328884: W tensorflow/compiler/tf2tensorrt/utils/py_utils.cc:38] TF-TRT Warning: Could not find TensorRT
+[DEBUG config] Loading env file: /workspace/paligemma_jax_training/envs/.env.openpi.10000
+[DEBUG config] File exists: True
+[DEBUG config] Found in file: GRADIENT_ACCUMULATION_STEPS=8
+[DEBUG config] Found in file: # GRADIENT_ACCUMULATION_STEPS=16
+[DEBUG config] GRADIENT_ACCUMULATION_STEPS after load_dotenv: 8
+Loading model...
+Loading PaliGemma model...
+  Model initialized
+  Tokenizer loaded
+  Using existing checkpoint: checkpoints/pi05_base_paligemma.npz
+  Loading parameters (this may take 1-2 minutes)...
+  Parameters loaded
+  Decode function created (devices: [cuda(id=0)])
+
+Debug: Checking params structure...
+  Top-level keys: ['img', 'llm']
+  'img' keys: ['Transformer', 'embedding', 'head', 'pos_embedding']
+Using base model from .env: ./checkpoints/pi05_base_paligemma.npz
+
+Loading dataset...
+2025-12-08 10:36:48.578901: W tensorflow/core/common_runtime/gpu/gpu_device.cc:2256] Cannot dlopen some GPU libraries. Please make sure the missing libraries mentioned above are installed properly if you would like to use GPU. Follow the guide at https://www.tensorflow.org/install/gpu for how to download and setup the required libraries for your platform.
+Skipping registering GPU devices...
+
+Testing sample: task2_robo_set_episode_010181_sample_1
+
+================================================================================
+MULTI-IMAGE PERCEPTION TEST
+Checkpoint: step base
+================================================================================
+
+Saved 6 images to: outputs/openpi_production/checkpoints/perception_tests/images/task2_robo_set_episode_010181_sample_1
+
+Sample Info:
+  Number of images: 6
+  Question: You will be shown several images captured during a robotic manipulation task.
+Each image comes with ...
+  Ground truth answer: 4
+
+================================================================================
+TEST 1: Individual Image Captions (one image at a time)
+================================================================================
+2025-12-08 10:36:49.784910: W external/xla/xla/service/gpu/nvptx_compiler.cc:765] The NVIDIA driver's CUDA version is 12.4 which is older than the ptxas CUDA version (12.9.86). Because the driver is older than the ptxas version, XLA is disabling parallel compilation, which may slow down compilation. You should update your NVIDIA driver or use the NVIDIA-provided CUDA forward compatibility packages.
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+
+Image 1
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: This image captures a moment from a professional kitchen scene. The main subjects are:
+
+1. A white countertop with a blue cutting board and a blue knife, both placed on the countertop.
+2. A large white plate with a blue handle, placed on the countertop.
+3. A blue knife with a black handle, positioned on the countertop.
+4. A blue spatula, positioned on the countertop.
+5. A red bottle opener, positioned on the countertop.
+6. A black bottle opener, placed on the countertop.
+7. A black bottle opener, positioned on the countertop.
+8. A blue bottle opener, positioned on the countertop.
+9. A blue bottle opener, positioned on the countertop.
+10. A blue bottle opener, positioned on the countertop.
+11. A blue bottle opener, positioned on the countertop.
+12. A blue bottle opener, positioned on the countertop.
+13. A blue bottle opener, positioned on the countertop.
+14. A blue bottle opener, positioned on the countertop.
+15. A blue bottle opener, positioned on the countertop.
+15. A blue bottle opener, positioned on the countertop.
+15. A blue bottle opener, positioned
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [ 3.9570312 -1.1513672  0.3840332]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+
+Image 2
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: The image shows a white microwave oven with a blue glass front panel. The microwave oven is positioned on a white surface, and the glass front panel is visible on the left side of the image. The microwave oven is white with a blue glass front panel, and the glass front panel is blue. The microwave oven is set up on a white surface, likely a kitchen counter or table.
+
+The microwave oven is set up with a black handle, and there are several items scattered around it, including a bottle, a bottle opener, and a bottle opener. The bottle opener is placed on the right side of the microwave oven.
+
+The microwave oven is set up on a white surface, possibly a kitchen counter or table. The microwave oven is positioned above the countertop, with the glass front panel facing the camera. The glass front panel is open, revealing the interior of the microwave oven.
+
+The kitchen counter is visible in the background, with a green towel and a black coffee pot visible on the left side of the image.
+
+The scene is well-lit, with the light source coming from above, creating a bright and inviting atmosphere. The microwave oven is the main focus of the image, with its glass front panel serving as the main subject.
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 5.484 -0.637 -0.31 ]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [ 5.484375   -0.63720703 -0.3100586 ]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [ 5.484 -0.637 -0.31 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [ 5.484 -0.637 -0.31 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 5.484 -0.637 -0.31 ]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [ 5.484 -0.637 -0.31 ]
+
+Image 3
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: This image captures a typical kitchen scene. The main objects visible are:
+
+1. A white countertop with a blue and black striped plate, a blue bowl, a white bowl, a white plate, a white bowl, a green bowl, a green bowl, a blue bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl, a green bowl,
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 4.926  -0.739   0.2406]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [ 4.9257812  -0.73876953  0.24060059]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [ 4.926  -0.739   0.2406]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [ 4.926  -0.739   0.2406]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 4.926  -0.739   0.2406]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [ 4.926  -0.739   0.2406]
+
+Image 4
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: This image captures a moment from a professional kitchen setting. The main subjects are:
+
+1. A white countertop with a red plate and a red cup, both with a red lid.
+2. A white bowl with a blue lid, likely containing a bowl of food.
+3. A black spatula, which is partially visible on the right side of the image.
+4. A black knife, likely used for cutting or cutting food.
+5. A white bowl with a blue lid, likely containing a bowl of soup.
+6. A blue cup, possibly containing a beverage.
+7. A yellow cup, possibly containing a drink.
+8. A yellow cup, possibly containing a drink.
+9. A yellow cup, possibly containing a drink.
+10. A yellow cup, possibly containing a drink.
+11. A black knife, likely used for cutting or cutting the food.
+12. A white bowl, possibly containing a sauce or condiment.
+13. A yellow cup, possibly containing a drink.
+14. A yellow cup, possibly containing a drink.
+15. A yellow cup, possibly containing a drink.
+16. A black knife, likely used for cutting or chopping.
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.781  -1.659  -0.5557]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [ 3.78125    -1.6591797  -0.55566406]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [ 3.781  -1.659  -0.5557]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [ 3.781  -1.659  -0.5557]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.781  -1.659  -0.5557]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [ 3.781  -1.659  -0.5557]
+
+Image 5
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: This image captures a scene from a kitchen setting. The main subjects are:
+
+1. A white plate with a red stripe and a red bottle on it
+2. A large light blue plate with a red stripe and a red bottle on it
+3. A white plate with a blue stripe and a red bottle on it
+4. A green plate with a white plate with a red stripe and a bottle on it
+5. A blue plate with a white plate with a red stripe and a bottle on it
+6. A green plate with a white plate with a red stripe and a bottle on it
+7. A green plate with a white plate with a red stripe and a bottle on it
+8. A green plate with a white plate with a red stripe and a bottle on it
+9. A green plate with a white plate with a red stripe and a bottle on it
+10. A green plate with a white plate with a red stripe and a bottle on it
+11. A green plate with a white plate with a red stripe and a bottle on it
+12. A green plate with a white plate with a red stripe and a bottle on it
+13. A green plate with a white plate with a red stripe and a
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [12.5625     -0.83496094  1.3183594 ]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1569]
+[EMBED_IMAGE]     Are they different? False
+[EMBED_IMAGE]       Are they different? False
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 5.51   -0.9077 -0.5654]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [ 5.5117188  -0.90771484 -0.5654297 ]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [ 5.51   -0.9077 -0.5654]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [ 5.51   -0.9077 -0.5654]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 5.51   -0.9077 -0.5654]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [ 5.51   -0.9077 -0.5654]
+
+Image 6
+  Prompt: 'Describe this image in detail. What objects are visible? What are they doing? Describe the scene, colors, positions, and any important details you notice.'
+  Response: The image showcases a scene from a food truck, specifically a ketchup bottle. The ketchup bottle is positioned on a plate, and there's a red bowl nearby. The food truck is on a white plate, and the food truck is in the background. The scene is set on a white surface, and there are several objects scattered around, including a yellow object, a yellow bowl, and a red bowl. The image is taken from the top of the image, with the food truck's top facing the camera.
+
+================================================================================
+TEST 2A: Progressive Image Count (Testing Multi-Image Input)
+================================================================================
+
+This test verifies if the model can perceive increasing numbers of images.
+We incrementally add images (1, 2, 3, ..., N) and ask 'How many images do you see?'
+If the model always responds '1', it may not be receiving multiple images correctly.
+
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.855  -0.1289 -0.7544]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.855  -0.1289 -0.7544]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 1 image(s) -> Model says: 'There are two images visible in the image. The main image shows a white rectangular object with a black border, which appears to be a piece of paper or a book. In the background, there's a white rectangular object with a black border, but it's not a clear image.'
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 2 image(s) -> Model says: 'There are two images visible in the image. The main image shows a white rectangular object with a blue stripe, which appears to be a piece of paper or a book. In the background, there's a white rectangular object with a blue stripe, though its details are not clearly visible. These two images are part of'
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 3 image(s) -> Model says: 'There are two images visible in the image. The main image shows a white toaster oven with a black handle, and a white plate with a blue stripe on it. Additionally, there's a black object in the bottom left corner that appears to be a black object.'
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 4 image(s) -> Model says: 'There are two images visible in the image. The main image shows a white microwave oven with a black handle, and a white plate with a yellow bowl on it. Additionally, there's a black and white photo of a kitchen countertop.'
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 5 image(s) -> Model says: 'There are two images visible in the image. One is a white plate with a red stripe, and the other is a pink plate with a white stripe.'
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 6.9882812  -2.4824219  -0.92578125]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1545]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+  With 6 image(s) -> Model says: '1'
+
+  Summary:
+  Num Images   Model Response       Correct?
+  ------------ -------------------- ----------
+  1            There are two images visible in the image. The main image shows a white rectangular object with a black border, which appears to be a piece of paper or a book. In the background, there's a white rectangular object with a black border, but it's not a clear image. ✗
+  2            There are two images visible in the image. The main image shows a white rectangular object with a blue stripe, which appears to be a piece of paper or a book. In the background, there's a white rectangular object with a blue stripe, though its details are not clearly visible. These two images are part of ✗
+  3            There are two images visible in the image. The main image shows a white toaster oven with a black handle, and a white plate with a blue stripe on it. Additionally, there's a black object in the bottom left corner that appears to be a black object. ✗
+  4            There are two images visible in the image. The main image shows a white microwave oven with a black handle, and a white plate with a yellow bowl on it. Additionally, there's a black and white photo of a kitchen countertop. ✗
+  5            There are two images visible in the image. One is a white plate with a red stripe, and the other is a pink plate with a white stripe. ✗
+  6            1                    ✗
+
+================================================================================
+TEST 2B: Sequential Multi-Image Description
+================================================================================
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2048, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(512, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(512, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 512
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 9.8203125 -3.75      -2.4667969]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2048, dtype=int32)), valid tokens per sample: [1580]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+
+Prompt: 'You are shown 6 images. Please describe each image in order from Image 1 to Image 6. For each image, describe what objects you see, their positions, colors, and what is happening.'
+  Response:
+The image shows a kitchen scene with a white countertop, a red bottle, a white plate, a gray bowl, a gray cup, a blue bowl, a blue cup, a blue bowl, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a blue cup, a
+
+================================================================================
+TEST 3: Answer Original Question
+================================================================================
+[EMBED_IMG_TEXT]   x (concatenated embeddings) shape: (Array(1, dtype=int32), Array(2560, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]   Concatenated x.shape: (Array(1, dtype=int32), Array(2560, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     ztxt.shape: (Array(1, dtype=int32), Array(1024, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMG_TEXT]     zimg.shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Final zimg shape: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     After reshape [B, T*tokens, E]: (Array(1, dtype=int32), Array(1536, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]     Original shape [B, T, H, W, C]: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE]   Input image shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT]   text.shape: (Array(1, dtype=int32), Array(1024, dtype=int32))
+[EMBED_IMG_TEXT]   image.shape: (Array(1, dtype=int32), Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]   === FINAL OUTPUT SUMMARY ===
+[EMBED_IMG_TEXT]     All image tokens are valid, padding input_mask
+[EMBED_IMG_TEXT] >>> PATH: num_images is None (no masking)
+[EMBED_IMG_TEXT]   ✓ Concatenation creates single sequence: [img_tokens | txt_tokens]
+[EMBED_IMG_TEXT]   Verifying concatenation:
+[EMBED_IMG_TEXT]   txt_len (text tokens): 1024
+[EMBED_IMG_TEXT]   img_len (tokens from images): 1536
+[EMBED_IMG_TEXT] >>> PATH: mask_ar provided
+[EMBED_IMG_TEXT] >>> PATH: input_mask provided
+[EMBED_IMG_TEXT]   After embedding:
+[EMBED_IMAGE] ========================================
+[EMBED_IMAGE]     Checking tokens from different images in same sample:
+[EMBED_IMAGE]     Before reshape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE] >>> PATH: Reshaping 5D output back
+[EMBED_IMAGE]   Checking if different images have different embeddings:
+[EMBED_IMAGE]   _img_model output zimg shape: (Array(6, dtype=int32), Array(256, dtype=int32), Array(2048, dtype=int32))
+[EMBED_IMAGE]   Calling _img_model...
+[EMBED_IMAGE]     Reshaped to [B*T, H, W, C]: (Array(6, dtype=int32), Array(224, dtype=int32), Array(224, dtype=int32), Array(3, dtype=int32))
+[EMBED_IMAGE] >>> PATH: 5D input detected (video/multi-image)
+[EMBED_IMAGE]   train mode: False
+[EMBED_IMAGE] Starting embed_image
+[EMBED_IMAGE] ========================================
+[EMBED_IMG_TEXT]   mask_ar provided: True
+[EMBED_IMG_TEXT]   input_mask provided: True
+[EMBED_IMG_TEXT]   num_images: None
+[EMBED_IMG_TEXT] Starting embed_image_and_text
+[EMBED_IMG_TEXT] ========================================
+[EMBED_IMG_TEXT]     Are text tokens different? True
+[EMBED_IMG_TEXT]     Text embeddings preserved? True
+[EMBED_IMG_TEXT]     Text token 1, first 3 dims: [ 9.8203125 -3.75      -2.4667969]
+[EMBED_IMG_TEXT]     x[0, 1536:3] (should be text): [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     ztxt[0, 0:3]: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]     Text token 0, first 3 dims: [ 6.125       0.24169922 -1.9541016 ]
+[EMBED_IMG_TEXT]   mask_ar shape: (Array(1, dtype=int32), Array(2560, dtype=int32)), causal tokens per sample: [0]
+[EMBED_IMG_TEXT]   input_mask shape: (Array(1, dtype=int32), Array(2560, dtype=int32)), valid tokens per sample: [1761]
+[EMBED_IMAGE]     Are they different? True
+[EMBED_IMAGE]       Are they different? True
+[EMBED_IMG_TEXT]     Image embeddings preserved? True
+[EMBED_IMAGE]     Image 1, token 0, first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMG_TEXT]     x[0, 0:3] (should be image): [4.1210938  0.009552   0.08062744]
+[EMBED_IMG_TEXT]     zimg[0, 0:3]: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 0 (token 0), first 3 dims: [4.12    0.00955 0.0806 ]
+[EMBED_IMAGE]       Sample 0, Image 1 (token 256), first 3 dims: [ 3.957 -1.151  0.384]
+[EMBED_IMAGE]     Image 0, token 0, first 3 dims: [4.12    0.00955 0.0806 ]
+
+Question: You will be shown several images captured during a robotic manipulation task.
+Each image comes with a description of the camera position from which it was taken.
+Please use this information to help an...
+  Model answer: The correct answer to the given question is:
+
+Task:
+- The image is a reflection of the same camera angle from the left side.
+- The camera is positioned in such a way that it's facing away from the camera's perspective.
+- The camera is positioned in such a way that it
+  Ground truth: 4
+  Correct: False
+
+================================================================================
+ANALYSIS
+================================================================================
+
+1. Individual Caption Diversity (TEST 1):
+   Unique captions: 6/6
+   ✓ Model generates different captions for different images
+
+2. Progressive Image Count Accuracy (TEST 2A):
+   Accuracy: 0/6 correct (0.0%)
+   ✗ CRITICAL: Model failed to count ANY image configuration correctly
+   This suggests the model may NOT be receiving multiple images properly
+
+3. Sequential Description (TEST 2B):
+   Response length: 1566 characters
+   Image references found: 0/6
+   ⚠️  WARNING: Model may not be describing all images separately
+
+4. Question Answering (TEST 3):
+   ✗ Incorrect answer
+     Model: 'The correct answer to the given question is:
+
+Task:
+- The image is a reflection of the same camera angle from the left side.
+- The camera is positioned in such a way that it's facing away from the camera's perspective.
+- The camera is positioned in such a way that it'
+     Expected: '4'
+
+================================================================================
+Results saved to: outputs/openpi_production/checkpoints/perception_tests/test_step_base_sample_task2_robo_set_episode_010181_sample_1.json
+================================================================================

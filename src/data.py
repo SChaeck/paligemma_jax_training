@@ -355,6 +355,8 @@ def preprocess_multi_images_grid(
     images: list,
     size: int = 224,
     grid_layout: str = "auto",
+    rows: int = 2,
+    cols: int = 3,
 ) -> np.ndarray:
     """
     DEPRECATED: This combines images into a grid, which loses information.
@@ -362,6 +364,13 @@ def preprocess_multi_images_grid(
 
     Preprocess multiple images by combining them into a single grid image.
     Kept for backward compatibility only.
+
+    Args:
+        images: List of images to combine
+        size: Target size (height and width)
+        grid_layout: Layout style ("auto", "horizontal", "vertical", "2x2", "2xN", or "RxC")
+        rows: Number of rows in grid (when grid_layout="RxC")
+        cols: Number of columns in grid (when grid_layout="RxC")
     """
     import warnings
     warnings.warn(
@@ -393,7 +402,10 @@ def preprocess_multi_images_grid(
     num_images = len(processed_images)
 
     # Determine grid layout
-    if grid_layout == "auto":
+    if grid_layout == "RxC":
+        # Use specified rows x cols layout
+        cell_h, cell_w = size // rows, size // cols
+    elif grid_layout == "auto":
         if num_images == 2:
             grid_layout = "horizontal"  # Side by side
         elif num_images <= 4:
@@ -401,10 +413,15 @@ def preprocess_multi_images_grid(
         else:
             # For more than 4 images, use 2-row layout
             grid_layout = "2xN"
-
-    # Resize images to same size for grid
-    # Use a larger intermediate size for better quality
-    if grid_layout == "horizontal":
+        # Determine cell size based on auto-selected layout
+        if grid_layout == "horizontal":
+            cell_h, cell_w = size, size // num_images
+        elif grid_layout == "2x2":
+            cell_h, cell_w = size // 2, size // 2
+        elif grid_layout == "2xN":
+            cols = (num_images + 1) // 2
+            cell_h, cell_w = size // 2, size // cols
+    elif grid_layout == "horizontal":
         # Side by side: each image gets half width
         cell_h, cell_w = size, size // num_images
     elif grid_layout == "vertical":
@@ -430,7 +447,22 @@ def preprocess_multi_images_grid(
         resized_images.append(resized.numpy())
 
     # Combine images into grid
-    if grid_layout == "horizontal":
+    if grid_layout == "RxC":
+        # Custom rows x cols layout
+        # Pad if necessary to fill the grid
+        total_cells = rows * cols
+        while len(resized_images) < total_cells:
+            resized_images.append(np.zeros_like(resized_images[0]))
+
+        # Build grid row by row
+        grid_rows = []
+        for r in range(rows):
+            start_idx = r * cols
+            end_idx = start_idx + cols
+            row = np.concatenate(resized_images[start_idx:end_idx], axis=1)
+            grid_rows.append(row)
+        combined = np.concatenate(grid_rows, axis=0)
+    elif grid_layout == "horizontal":
         combined = np.concatenate(resized_images, axis=1)
     elif grid_layout == "vertical":
         combined = np.concatenate(resized_images, axis=0)
@@ -443,12 +475,12 @@ def preprocess_multi_images_grid(
         row2 = np.concatenate(resized_images[2:4], axis=1)
         combined = np.concatenate([row1, row2], axis=0)
     elif grid_layout == "2xN":
-        cols = (num_images + 1) // 2
+        cols_2xn = (num_images + 1) // 2
         # Pad if necessary
-        while len(resized_images) < cols * 2:
+        while len(resized_images) < cols_2xn * 2:
             resized_images.append(np.zeros_like(resized_images[0]))
-        row1 = np.concatenate(resized_images[0:cols], axis=1)
-        row2 = np.concatenate(resized_images[cols:cols*2], axis=1)
+        row1 = np.concatenate(resized_images[0:cols_2xn], axis=1)
+        row2 = np.concatenate(resized_images[cols_2xn:cols_2xn*2], axis=1)
         combined = np.concatenate([row1, row2], axis=0)
     else:
         combined = resized_images[0]
@@ -501,7 +533,7 @@ def preprocess_tokens(
     IMPORTANT: The model prepends image tokens to the text sequence internally.
     We need to account for this in mask_ar and mask_loss so that:
     - Image tokens use full attention (mask_ar=0) and are not trained (mask_loss=0)
-    - Prefix text uses full attention (mask_ar=0) and is not trained (mask_loss=0)
+    - Prefix text uses full attention (mask_ar=0) and IS trained (mask_loss=1) [CHANGED for XVR]
     - Suffix text uses causal attention (mask_ar=1) and IS trained (mask_loss=1)
 
     Args:
@@ -522,7 +554,12 @@ def preprocess_tokens(
     # Tokenize prefix with BOS token
     tokens = tokenizer.encode(prefix, add_bos=True) + tokenizer.encode(separator)
     mask_ar = [0] * len(tokens)
-    mask_loss = [0] * len(tokens)
+
+    # Control whether to train on prefix (question) via environment variable
+    # TRAIN_ON_PREFIX=1: Train on question tokens (more signal for image utilization)
+    # TRAIN_ON_PREFIX=0: Don't train on question tokens (default PaliGemma behavior)
+    train_on_prefix = os.environ.get("TRAIN_ON_PREFIX", "0") == "1"
+    mask_loss = [1 if train_on_prefix else 0] * len(tokens)
 
     # Calculate image token count
     image_tokens_per_image = get_image_token_count(image_size, patch_size)
@@ -534,8 +571,10 @@ def preprocess_tokens(
         _log_pipeline("4.TOKENIZE", f"  num_images: {num_images}")
         _log_pipeline("4.TOKENIZE", f"  image_tokens_per_image: {image_tokens_per_image} ({image_size}x{image_size} / {patch_size}x{patch_size})")
         _log_pipeline("4.TOKENIZE", f"  total_image_tokens: {total_image_tokens}")
+        _log_pipeline("4.TOKENIZE", f"  TRAIN_ON_PREFIX: {train_on_prefix}")
         _log_pipeline("4.TOKENIZE", f"  prefix: '{prefix[:80]}...'")
         _log_pipeline("4.TOKENIZE", f"  prefix tokens (with BOS + separator): {len(tokens)}")
+        _log_pipeline("4.TOKENIZE", f"  prefix will be {'TRAINED' if train_on_prefix else 'NOT trained'}")
 
     # Add suffix if provided
     suffix_token_count = 0
@@ -834,6 +873,9 @@ def create_train_iterator(
     batch_size: int,
     prompt_prefix: str = "",  # Empty by default (matching Google's official tutorial)
     max_images: int = 6,
+    use_image_grid: bool = False,  # If True, combine images into grid
+    grid_rows: int = 2,
+    grid_cols: int = 3,
 ) -> Iterator[Dict[str, np.ndarray]]:
     """
     Create a training data iterator.
@@ -843,6 +885,9 @@ def create_train_iterator(
         batch_size: Number of examples per batch
         prompt_prefix: Prefix for all prompts (empty by default, can be set to "answer en" etc.)
         max_images: Maximum number of images per sample
+        use_image_grid: If True, combine multiple images into a single grid image
+        grid_rows: Number of rows in grid layout (for use_image_grid=True)
+        grid_cols: Number of columns in grid layout (for use_image_grid=True)
 
     Yields:
         Dictionary with sample data (NOT batched - batching happens in training loop)
@@ -867,20 +912,43 @@ def create_train_iterator(
             if not sample['images']:
                 continue
 
-            # Load and process ALL images as separate frames (NOT grid!)
+            # Load images
             try:
                 loaded_images = []
                 for img_path in sample['images']:
                     img = dataset.load_image(img_path)
                     loaded_images.append(img)
 
-                # Process images as separate frames [num_images, H, W, 3]
-                # This is the CORRECT approach for multi-image!
-                images, num_images = preprocess_multi_images(
-                    loaded_images,
-                    size=dataset.image_size,
-                    max_images=max_images,
-                )
+                # Process images: grid mode or native multi-image mode
+                if use_image_grid:
+                    # Grid mode: Combine multiple images into a single grid image
+                    # Returns [1, H, W, 3] with num_images=1
+                    if _should_log_sample():
+                        _log_pipeline("3.IMAGE_GRID", f">>> Using GRID mode: combining {len(loaded_images)} images into {grid_rows}x{grid_cols} grid")
+                    grid_image = preprocess_multi_images_grid(
+                        loaded_images,
+                        size=dataset.image_size,
+                        grid_layout="RxC",  # Use custom rows x cols layout
+                        rows=grid_rows,
+                        cols=grid_cols,
+                    )
+                    # Reshape to [1, H, W, 3] for consistency with multi-image format
+                    images = np.expand_dims(grid_image, axis=0)
+                    num_images = 1  # Single grid image
+                    if _should_log_sample():
+                        _log_pipeline("3.IMAGE_GRID", f"    Result: images.shape={images.shape}, num_images={num_images}")
+                else:
+                    # Native multi-image mode: Process images as separate frames [num_images, H, W, 3]
+                    # This is the CORRECT approach for multi-image!
+                    if _should_log_sample():
+                        _log_pipeline("3.MULTI_IMAGE", f">>> Using NATIVE multi-image mode: {len(loaded_images)} images")
+                    images, num_images = preprocess_multi_images(
+                        loaded_images,
+                        size=dataset.image_size,
+                        max_images=max_images,
+                    )
+                    if _should_log_sample():
+                        _log_pipeline("3.MULTI_IMAGE", f"    Result: images.shape={images.shape}, num_images={num_images}")
             except Exception as e:
                 print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
                 continue
@@ -946,6 +1014,9 @@ def create_eval_iterator(
     prompt_prefix: str = "",  # Empty by default (matching Google's official tutorial)
     num_examples: Optional[int] = None,
     max_images: int = 6,
+    use_image_grid: bool = False,  # If True, combine images into grid
+    grid_rows: int = 2,
+    grid_cols: int = 3,
 ) -> Iterator[Dict[str, np.ndarray]]:
     """
     Create an evaluation data iterator.
@@ -956,6 +1027,9 @@ def create_eval_iterator(
         prompt_prefix: Prefix for all prompts (empty by default, can be set to "answer en" etc.)
         num_examples: Maximum number of examples to yield (None = all)
         max_images: Maximum number of images per sample
+        use_image_grid: If True, combine multiple images into a single grid image
+        grid_rows: Number of rows in grid layout (for use_image_grid=True)
+        grid_cols: Number of columns in grid layout (for use_image_grid=True)
 
     Yields:
         Dictionary with sample data for evaluation
@@ -984,19 +1058,38 @@ def create_eval_iterator(
             if not sample['images']:
                 continue
 
-            # Load and process ALL images as separate frames (NOT grid!)
+            # Load images
             try:
                 loaded_images = []
                 for img_path in sample['images']:
                     img = dataset.load_image(img_path)
                     loaded_images.append(img)
 
-                # Process images as separate frames [num_images, H, W, 3]
-                images, num_images = preprocess_multi_images(
-                    loaded_images,
-                    size=dataset.image_size,
-                    max_images=max_images,
-                )
+                # Process images: grid mode or native multi-image mode
+                if use_image_grid:
+                    # Grid mode: Combine multiple images into a single grid image
+                    # Returns [1, H, W, 3] with num_images=1
+                    print(f"[EVAL] Using GRID mode: combining {len(loaded_images)} images into {grid_rows}x{grid_cols} grid")
+                    grid_image = preprocess_multi_images_grid(
+                        loaded_images,
+                        size=dataset.image_size,
+                        grid_layout="RxC",  # Use custom rows x cols layout
+                        rows=grid_rows,
+                        cols=grid_cols,
+                    )
+                    # Reshape to [1, H, W, 3] for consistency with multi-image format
+                    images = np.expand_dims(grid_image, axis=0)
+                    num_images = 1  # Single grid image
+                    print(f"[EVAL] Result: images.shape={images.shape}, num_images={num_images}")
+                else:
+                    # Native multi-image mode: Process images as separate frames [num_images, H, W, 3]
+                    print(f"[EVAL] Using NATIVE multi-image mode: {len(loaded_images)} images")
+                    images, num_images = preprocess_multi_images(
+                        loaded_images,
+                        size=dataset.image_size,
+                        max_images=max_images,
+                    )
+                    print(f"[EVAL] Result: images.shape={images.shape}, num_images={num_images}")
             except Exception as e:
                 print(f"Warning: Failed to load images for sample {sample.get('sample_id', 'unknown')}: {e}")
                 continue
@@ -1110,3 +1203,314 @@ def prefetch_iterator(iterator: Iterator, prefetch_size: int = 2) -> Iterator:
         Iterator that prefetches in background
     """
     return PrefetchIterator(iterator, prefetch_size)
+
+
+# =============================================================================
+# RefCOCOg Dataset
+# =============================================================================
+
+
+class RefCOCOgDataset(XVRDataset):
+    """
+    Dataset class for loading RefCOCOg data in JSONL format.
+
+    RefCOCOg is a referring expression comprehension dataset where the task is
+    to localize an object in an image given a natural language description.
+
+    Unlike XVR which has multiple images per sample, RefCOCOg has a single image.
+    The output is a bounding box [x, y, width, height].
+
+    Inherits from XVRDataset since the JSONL format is identical.
+    """
+
+    def __init__(
+        self,
+        jsonl_path: str,
+        image_base_dir: str,
+        tokenizer,
+        max_seq_length: int = 512,
+        image_size: int = 224,
+        max_samples: Optional[int] = None,
+        shuffle_buffer_size: int = 1000,
+    ):
+        """
+        Initialize RefCOCOg dataset loader.
+
+        Args:
+            jsonl_path: Path to JSONL file (train.jsonl, val.jsonl, etc.)
+            image_base_dir: Base directory containing image files
+            tokenizer: SentencePiece tokenizer
+            max_seq_length: Maximum sequence length for text
+            image_size: Image size (height and width)
+            max_samples: Maximum number of samples to use (None = all)
+            shuffle_buffer_size: Buffer size for shuffling
+        """
+        super().__init__(
+            jsonl_path=jsonl_path,
+            image_base_dir=image_base_dir,
+            tokenizer=tokenizer,
+            max_seq_length=max_seq_length,
+            image_size=image_size,
+            max_samples=max_samples,
+            shuffle_buffer_size=shuffle_buffer_size,
+        )
+
+    def parse_sample(self, line: str) -> Dict:
+        """
+        Parse a single JSONL line into a structured sample.
+
+        RefCOCOg format has the same structure as XVR but typically
+        contains only a single image per sample.
+
+        Args:
+            line: JSON line from JSONL file
+
+        Returns:
+            Dictionary with parsed sample data
+        """
+        data = json.loads(line)
+
+        # Extract images and text from prompt_blocks
+        images = []
+        text_parts = []
+
+        for block in data['prompt_blocks']:
+            if block['type'] == 'text':
+                if block.get('text'):
+                    text_parts.append(block['text'])
+            elif block['type'] == 'image_url':
+                image_url = block.get('image_url')
+                if image_url and image_url.get('url'):
+                    image_path = image_url['url']
+                    images.append(image_path)
+
+        # Combine text parts into a single prompt
+        prompt = ''.join(text_parts)
+
+        # Get ground truth answer (bounding box as string)
+        answer = data.get('ground_truth_answer', '')
+
+        result = {
+            'sample_id': data['sample_id'],
+            'task': data['task'],
+            'images': images,
+            'prompt': prompt,
+            'answer': answer,
+        }
+
+        # Pipeline logging
+        if _should_log_sample():
+            _log_pipeline("1.PARSE", "=" * 60)
+            _log_pipeline("1.PARSE", f"Sample ID: {result['sample_id']}")
+            _log_pipeline("1.PARSE", f"Task: {result['task']}")
+            _log_pipeline("1.PARSE", f"Number of images: {len(images)}")
+            for i, img_path in enumerate(images):
+                _log_pipeline("1.PARSE", f"  Image {i}: {img_path}", indent=1)
+            _log_pipeline("1.PARSE", f"Prompt length: {len(prompt)} chars")
+            _log_pipeline("1.PARSE", f"Prompt preview: {prompt[:100]}...")
+            _log_pipeline("1.PARSE", f"Answer (bbox): '{answer}'")
+
+        return result
+
+
+def create_refcocog_train_iterator(
+    dataset: RefCOCOgDataset,
+    batch_size: int,
+    prompt_prefix: str = "",
+) -> Iterator[Dict[str, np.ndarray]]:
+    """
+    Create a training data iterator for RefCOCOg dataset.
+
+    RefCOCOg uses single images, so we don't need multi-image handling.
+
+    Args:
+        dataset: RefCOCOgDataset instance
+        batch_size: Number of examples per batch
+        prompt_prefix: Prefix for all prompts (empty by default)
+
+    Yields:
+        Dictionary with sample data
+    """
+    tf_dataset = dataset.get_tfdata(shuffle=True, repeat=True)
+
+    for line in tf_dataset.as_numpy_iterator():
+        sample = dataset.parse_sample(line.decode('utf-8'))
+
+        # Check if images are disabled via environment variable
+        disable_images = os.environ.get("DISABLE_IMAGES", "0") == "1"
+
+        if disable_images:
+            # Return empty images with num_images=0
+            images = np.zeros((0, dataset.image_size, dataset.image_size, 3), dtype=np.float32)
+            num_images = 0
+        else:
+            if not sample['images']:
+                continue
+
+            # Load single image (RefCOCOg has one image per sample)
+            try:
+                img_path = sample['images'][0]
+                img = dataset.load_image(img_path)
+
+                # Preprocess single image
+                processed = preprocess_single_image(img, dataset.image_size)
+                # Shape: [1, H, W, 3] for consistency with multi-image format
+                images = np.expand_dims(processed, axis=0)
+                num_images = 1
+
+                if _should_log_sample():
+                    _log_pipeline("3.PREPROCESS_IMG", f"Single image processed: {images.shape}")
+
+            except Exception as e:
+                print(f"Warning: Failed to load image for sample {sample.get('sample_id', 'unknown')}: {e}")
+                continue
+
+        # Combine prompt_prefix with the actual question
+        if prompt_prefix:
+            full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        else:
+            full_prefix = sample['prompt']
+
+        suffix = sample['answer']
+        tokens, mask_ar, mask_loss, _ = preprocess_tokens(
+            prefix=full_prefix,
+            suffix=suffix,
+            seqlen=dataset.max_seq_length,
+            tokenizer=dataset.tokenizer,
+            num_images=num_images,
+            image_size=dataset.image_size,
+        )
+
+        # Pipeline logging
+        if _should_log_sample():
+            image_tokens_per_image = get_image_token_count(dataset.image_size, patch_size=14)
+            total_image_tokens = image_tokens_per_image * num_images
+            _log_pipeline("5.YIELD", "=" * 60)
+            _log_pipeline("5.YIELD", f"RefCOCOg sample ready:")
+            _log_pipeline("5.YIELD", f"  sample_id: {sample.get('sample_id', None)}")
+            _log_pipeline("5.YIELD", f"  image.shape: {images.shape}")
+            _log_pipeline("5.YIELD", f"  num_images: {num_images}")
+            _log_pipeline("5.YIELD", f"  total_image_tokens: {total_image_tokens}")
+            _log_pipeline("5.YIELD", f"  text tokens: {np.count_nonzero(tokens)}")
+            _log_pipeline("5.YIELD", f"  ground_truth (bbox): '{suffix}'")
+            _log_pipeline("5.YIELD", "=" * 60)
+            _increment_sample_count()
+
+        yield {
+            'image': images,  # Shape: [1, H, W, 3]
+            'text': np.asarray(tokens),
+            'mask_ar': np.asarray(mask_ar),
+            'mask_loss': np.asarray(mask_loss),
+            'num_images': num_images,
+            'input_prompt': full_prefix,
+            'ground_truth': suffix,
+            'sample_id': sample.get('sample_id', None),
+        }
+
+
+def create_refcocog_eval_iterator(
+    dataset: RefCOCOgDataset,
+    batch_size: int,
+    prompt_prefix: str = "",
+    num_examples: Optional[int] = None,
+) -> Iterator[Dict[str, np.ndarray]]:
+    """
+    Create an evaluation data iterator for RefCOCOg dataset.
+
+    Args:
+        dataset: RefCOCOgDataset instance
+        batch_size: Number of examples per batch
+        prompt_prefix: Prefix for all prompts
+        num_examples: Maximum number of examples to yield (None = all)
+
+    Yields:
+        Dictionary with sample data for evaluation
+    """
+    tf_dataset = dataset.get_tfdata(shuffle=False, repeat=False)
+
+    count = 0
+    for line in tf_dataset.as_numpy_iterator():
+        if num_examples and count >= num_examples:
+            break
+
+        sample = dataset.parse_sample(line.decode('utf-8'))
+
+        # Check if images are disabled via environment variable
+        disable_images = os.environ.get("DISABLE_IMAGES", "0") == "1"
+
+        if disable_images:
+            images = np.zeros((0, dataset.image_size, dataset.image_size, 3), dtype=np.float32)
+            num_images = 0
+        else:
+            if not sample['images']:
+                continue
+
+            try:
+                img_path = sample['images'][0]
+                img = dataset.load_image(img_path)
+                processed = preprocess_single_image(img, dataset.image_size)
+                images = np.expand_dims(processed, axis=0)
+                num_images = 1
+            except Exception as e:
+                print(f"Warning: Failed to load image for sample {sample.get('sample_id', 'unknown')}: {e}")
+                continue
+
+        # Combine prompt_prefix with the actual question
+        if prompt_prefix:
+            full_prefix = f"{prompt_prefix} {sample['prompt']}"
+        else:
+            full_prefix = sample['prompt']
+
+        tokens, mask_ar, _, mask_input = preprocess_tokens(
+            prefix=full_prefix,
+            suffix=None,  # No suffix for evaluation
+            seqlen=dataset.max_seq_length,
+            tokenizer=dataset.tokenizer,
+            num_images=num_images,
+            image_size=dataset.image_size,
+        )
+
+        yield {
+            'image': images,
+            'text': np.asarray(tokens),
+            'mask_ar': np.asarray(mask_ar),
+            'mask_input': np.asarray(mask_input),
+            'sample_id': sample['sample_id'],
+            'ground_truth': sample['answer'],
+            'input_prompt': full_prefix,
+            'num_images': num_images,
+        }
+
+        count += 1
+
+
+def collate_refcocog_batch(samples: list, max_images: int = 1, image_size: int = 224) -> Dict[str, np.ndarray]:
+    """
+    Collate a list of RefCOCOg samples into a batch for training.
+
+    RefCOCOg has single images, so max_images is always 1 (parameter kept for interface consistency).
+
+    Args:
+        samples: List of sample dictionaries from the iterator
+        max_images: Ignored (always 1 for RefCOCOg)
+        image_size: Image size
+
+    Returns:
+        Batched dictionary
+    """
+    return collate_batch(samples, max_images=1, image_size=image_size)
+
+
+def collate_refcocog_eval_batch(samples: list, max_images: int = 1, image_size: int = 224) -> Dict[str, np.ndarray]:
+    """
+    Collate a list of RefCOCOg samples into a batch for evaluation.
+
+    Args:
+        samples: List of sample dictionaries from the iterator
+        max_images: Ignored (always 1 for RefCOCOg)
+        image_size: Image size
+
+    Returns:
+        Batched dictionary with evaluation metadata
+    """
+    return collate_eval_batch(samples, max_images=1, image_size=image_size)

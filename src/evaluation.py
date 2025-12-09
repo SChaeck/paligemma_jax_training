@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional, List
 import numpy as np
 import jax
 from PIL import Image
+from tqdm import tqdm
 
 from .config import Config
 from .data import XVRDataset, create_eval_iterator, postprocess_tokens, collate_eval_batch
@@ -106,6 +107,9 @@ def evaluate_model(
         prompt_prefix=config.data.prompt_prefix,
         num_examples=num_eval,
         max_images=max_images,
+        use_image_grid=config.data.use_image_grid,
+        grid_rows=config.data.grid_rows,
+        grid_cols=config.data.grid_cols,
     )
 
     predictions = []
@@ -124,7 +128,14 @@ def evaluate_model(
     batch_num_images = []
     batch_images_for_debug = []  # Store images for debugging
 
-    for sample in eval_iterator:
+    # Calculate total batches for progress bar
+    total_samples = num_eval if num_eval else eval_dataset.num_samples
+    total_batches = (total_samples + config.eval.batch_size - 1) // config.eval.batch_size
+
+    # Wrap iterator with tqdm
+    pbar = tqdm(eval_iterator, total=total_samples, desc="Evaluating", disable=not verbose)
+
+    for sample in pbar:
         batch_samples.append(sample)
         batch_sample_ids.append(sample.get('sample_id', None))
         batch_ground_truths.append(sample.get('ground_truth', None))
@@ -173,6 +184,12 @@ def evaluate_model(
                 all_num_images.append(batch_num_images[i])
                 all_images.append(batch_images_for_debug[i])
 
+            # Update progress bar with current accuracy
+            if predictions:
+                current_acc = sum(p.lower().strip() == g.lower().strip()
+                                 for p, g in zip(predictions, ground_truths)) / len(predictions)
+                pbar.set_postfix({"acc": f"{current_acc:.2%}"})
+
             # Reset batch
             batch_samples = []
             batch_sample_ids = []
@@ -218,6 +235,15 @@ def evaluate_model(
             all_input_prompts.append(batch_input_prompts[i])
             all_num_images.append(batch_num_images[i])
             all_images.append(batch_images_for_debug[i])
+
+        # Update progress bar with current accuracy
+        if predictions:
+            current_acc = sum(p.lower().strip() == g.lower().strip()
+                             for p, g in zip(predictions, ground_truths)) / len(predictions)
+            pbar.set_postfix({"acc": f"{current_acc:.2%}"})
+
+    # Close progress bar
+    pbar.close()
 
     # Build per-sample results
     sample_results = []

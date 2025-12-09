@@ -81,6 +81,7 @@ class TrainingConfig:
 @dataclass
 class DataConfig:
     """Data configuration."""
+    dataset_type: str = "xvr"  # "xvr" or "refcocog"
     base_dir: str = "/home/suchae/pi_workspace/XVR"
     train_file: str = "train.jsonl"
     valid_file: str = "valid.jsonl"
@@ -99,6 +100,11 @@ class DataConfig:
     max_seq_length: int = 512
     shuffle_buffer_size: int = 1000
     prompt_prefix: str = ""  # Empty by default (matching Google's official tutorial)
+
+    # Multi-image handling strategy
+    use_image_grid: bool = False  # If True, combine multiple images into a single grid
+    grid_rows: int = 2  # Grid layout rows (for use_image_grid=True)
+    grid_cols: int = 3  # Grid layout cols (for use_image_grid=True)
 
     max_train_samples: Optional[int] = None
     max_eval_samples: Optional[int] = None
@@ -195,7 +201,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
             checkpoint_path=_get_str("MODEL_CHECKPOINT_PATH", "./checkpoints/pi05_base_paligemma.npz"),
             checkpoint_url=_get_str("MODEL_CHECKPOINT_URL", "") or None,
             tokenizer_path=_get_str("MODEL_TOKENIZER_PATH", "./assets/paligemma_tokenizer.model"),
-            kaggle_handle=_get_str("MODEL_KAGGLE_HANDLE", "google/paligemma/jax/paligemma-3b-pt-224"),
+            kaggle_handle=_get_str("MODEL_KAGGLE_HANDLE", ""),
             llm_variant=_get_str("MODEL_LLM_VARIANT", "gemma_2b"),
             vocab_size=_get_int("MODEL_VOCAB_SIZE", 257152),
             img_size=_get_int("MODEL_IMG_SIZE", 224),
@@ -223,6 +229,7 @@ def load_config(env_file: Optional[str] = None) -> Config:
         ),
 
         data=DataConfig(
+            dataset_type=_get_str("DATASET_TYPE", "xvr"),
             base_dir=_get_str("DATA_BASE_DIR", "/home/suchae/pi_workspace/XVR"),
             train_file=_get_str("DATA_TRAIN_FILE", "train.jsonl"),
             valid_file=_get_str("DATA_VALID_FILE", "valid.jsonl"),
@@ -231,6 +238,9 @@ def load_config(env_file: Optional[str] = None) -> Config:
             max_seq_length=_get_int("MAX_SEQ_LENGTH", 512),
             shuffle_buffer_size=_get_int("SHUFFLE_BUFFER_SIZE", 1000),
             prompt_prefix=_get_str("PROMPT_PREFIX", ""),  # Empty by default
+            use_image_grid=_get_bool("USE_IMAGE_GRID", False),
+            grid_rows=_get_int("GRID_ROWS", 2),
+            grid_cols=_get_int("GRID_COLS", 3),
             max_train_samples=_get_int("MAX_TRAIN_SAMPLES", None),
             max_eval_samples=_get_int("MAX_EVAL_SAMPLES", None),
         ),
@@ -320,9 +330,14 @@ def print_config(config: Config) -> None:
     print(f"  LR Schedule: {config.training.lr_schedule}")
 
     print(f"\nData:")
+    print(f"  Dataset Type: {config.data.dataset_type}")
     print(f"  Base Dir: {config.data.base_dir}")
     print(f"  Train File: {config.data.train_file}")
     print(f"  Max Seq Length: {config.data.max_seq_length}")
+    if config.data.use_image_grid:
+        print(f"  Image Mode: Grid ({config.data.grid_rows}x{config.data.grid_cols} layout)")
+    else:
+        print(f"  Image Mode: Native multi-image (5D tensor)")
     if config.data.max_train_samples:
         print(f"  Max Train Samples: {config.data.max_train_samples}")
 

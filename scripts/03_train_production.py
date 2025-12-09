@@ -50,7 +50,11 @@ from src.model import (
     prepare_params_for_training,
     save_checkpoint,
 )
-from src.data import XVRDataset, create_train_iterator, collate_batch, enable_pipeline_debug, _PIPELINE_DEBUG, _log_pipeline
+from src.data import (
+    XVRDataset, create_train_iterator, collate_batch, enable_pipeline_debug, _PIPELINE_DEBUG, _log_pipeline,
+    # RefCOCOg support
+    RefCOCOgDataset, create_refcocog_train_iterator, collate_refcocog_batch,
+)
 from src.training import (
     create_learning_rate_schedule,
     compiled_train_step_adam,
@@ -90,11 +94,15 @@ def save_training_batch(
     tokenizer: Any,
     output_dir: str,
     max_samples: int = 4,
+    use_image_grid: bool = False,
 ):
     """
     Save training batch samples for debugging - EXACTLY like validation does it.
 
     Simply saves the original text from batch_samples (input_prompt and ground_truth).
+
+    Args:
+        use_image_grid: If True, images are in grid format (single combined image)
     """
     import PIL.Image
 
@@ -131,6 +139,7 @@ def save_training_batch(
 
         # Save images directly from batch_samples to avoid mixing
         # sample['image'] has shape [num_images, H, W, 3]
+        # If use_image_grid=True, num_images=1 and it's a single grid image
         sample_images = sample.get('image', None)
         image_paths = []
         if sample_images is not None and num_images > 0:
@@ -145,9 +154,15 @@ def save_training_batch(
                 else:
                     img = img.clip(0, 255).astype(np.uint8)
 
-                img_path = os.path.join(images_dir, f"sample_{i:02d}_image_{img_idx}.png")
+                # Use clear naming for grid vs individual images
+                if use_image_grid:
+                    img_path = os.path.join(images_dir, f"sample_{i:02d}_grid.png")
+                    image_paths.append(f"images/sample_{i:02d}_grid.png")
+                else:
+                    img_path = os.path.join(images_dir, f"sample_{i:02d}_image_{img_idx}.png")
+                    image_paths.append(f"images/sample_{i:02d}_image_{img_idx}.png")
+
                 PIL.Image.fromarray(img).save(img_path)
-                image_paths.append(f"images/sample_{i:02d}_image_{img_idx}.png")
 
         sample_info["image_paths"] = image_paths
         samples_info.append(sample_info)
@@ -431,9 +446,23 @@ def train_production(config):
     # Helper function to print GPU memory
     def print_gpu_memory(stage):
         import subprocess
-        result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free', '--format=csv,noheader,nounits'], capture_output=True, text=True)
-        used, free = result.stdout.strip().split(', ')
-        print(f'  [GPU Memory] {stage}: {int(used)//1024}GB used, {int(free)//1024}GB free')
+        try:
+            result = subprocess.run(['nvidia-smi', '--query-gpu=memory.used,memory.free', '--format=csv,noheader,nounits'], capture_output=True, text=True)
+            if result.returncode != 0 or not result.stdout.strip():
+                print(f'  [GPU Memory] {stage}: Unable to query GPU memory')
+                return
+            
+            # Get first line (first GPU) and split by comma
+            first_line = result.stdout.strip().split('\n')[0]
+            values = [v.strip() for v in first_line.split(',')]
+            
+            if len(values) >= 2:
+                used, free = values[0], values[1]
+                print(f'  [GPU Memory] {stage}: {int(used)//1024}GB used, {int(free)//1024}GB free')
+            else:
+                print(f'  [GPU Memory] {stage}: Unexpected output format')
+        except Exception as e:
+            print(f'  [GPU Memory] {stage}: Error querying GPU memory: {e}')
     
     print_gpu_memory("Before model loading")
     model, params, tokenizer, decode_fn = load_paligemma_model(config)
@@ -453,7 +482,26 @@ def train_production(config):
     # ==========================================================================
     print_banner("Step 2: Preparing Data")
 
-    train_dataset = XVRDataset(
+    # Select dataset class based on dataset_type
+    dataset_type = config.data.dataset_type.lower()
+    print(f"  Dataset type: {dataset_type}")
+
+    if dataset_type == "refcocog":
+        # RefCOCOg dataset (single image, bounding box prediction)
+        DatasetClass = RefCOCOgDataset
+        create_iterator_fn = create_refcocog_train_iterator
+        collate_fn = collate_refcocog_batch
+        max_images_for_dataset = 1  # RefCOCOg has single images
+        print(f"  Using RefCOCOgDataset (single image per sample)")
+    else:
+        # Default: XVR dataset (multi-image)
+        DatasetClass = XVRDataset
+        create_iterator_fn = create_train_iterator
+        collate_fn = collate_batch
+        max_images_for_dataset = config.training.max_images
+        print(f"  Using XVRDataset (multi-image: up to {max_images_for_dataset} images)")
+
+    train_dataset = DatasetClass(
         jsonl_path=os.path.join(config.data.base_dir, config.data.train_file),
         image_base_dir=config.data.base_dir,
         tokenizer=tokenizer,
@@ -463,7 +511,7 @@ def train_production(config):
         shuffle_buffer_size=config.data.shuffle_buffer_size,
     )
 
-    valid_dataset = XVRDataset(
+    valid_dataset = DatasetClass(
         jsonl_path=os.path.join(config.data.base_dir, config.data.valid_file),
         image_base_dir=config.data.base_dir,
         tokenizer=tokenizer,
@@ -476,12 +524,23 @@ def train_production(config):
     print(f"  Training samples: {train_dataset.num_samples}")
     print(f"  Validation samples: {valid_dataset.num_samples}")
 
-    train_iterator = create_train_iterator(
-        train_dataset,
-        batch_size=config.training.batch_size,
-        prompt_prefix=config.data.prompt_prefix,
-        max_images=config.training.max_images,
-    )
+    # Create iterator based on dataset type
+    if dataset_type == "refcocog":
+        train_iterator = create_iterator_fn(
+            train_dataset,
+            batch_size=config.training.batch_size,
+            prompt_prefix=config.data.prompt_prefix,
+        )
+    else:
+        train_iterator = create_iterator_fn(
+            train_dataset,
+            batch_size=config.training.batch_size,
+            prompt_prefix=config.data.prompt_prefix,
+            max_images=config.training.max_images,
+            use_image_grid=config.data.use_image_grid,
+            grid_rows=config.data.grid_rows,
+            grid_cols=config.data.grid_cols,
+        )
 
     # ==========================================================================
     # Setup Training
@@ -608,13 +667,13 @@ def train_production(config):
     if os.environ.get("DATA_PIPELINE_DEBUG", "0") == "1":
         enable_pipeline_debug(max_samples=3)
         print("\n[PIPELINE DEBUG] Enabled - will log first 3 samples in detail\n")
-        
+
         # Debug: Check embedding generation with a test batch
         print("\n[EMBEDDING DEBUG] Checking embedding generation...")
         test_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
-        test_batch = collate_batch(
+        test_batch = collate_fn(
             test_samples,
-            max_images=config.training.max_images,
+            max_images=max_images_for_dataset,
             image_size=config.model.img_size,
         )
         test_batch = shard_batch(test_batch, data_sharding, config)
@@ -670,12 +729,22 @@ def train_production(config):
         print("[EMBEDDING DEBUG] Done\n")
         
         # Recreate iterator since we consumed some samples
-        train_iterator = create_train_iterator(
-            train_dataset,
-            batch_size=config.training.batch_size,
-            prompt_prefix=config.data.prompt_prefix,
-            max_images=config.training.max_images,
-        )
+        if dataset_type == "refcocog":
+            train_iterator = create_iterator_fn(
+                train_dataset,
+                batch_size=config.training.batch_size,
+                prompt_prefix=config.data.prompt_prefix,
+            )
+        else:
+            train_iterator = create_iterator_fn(
+                train_dataset,
+                batch_size=config.training.batch_size,
+                prompt_prefix=config.data.prompt_prefix,
+                max_images=config.training.max_images,
+                use_image_grid=config.data.use_image_grid,
+                grid_rows=config.data.grid_rows,
+                grid_cols=config.data.grid_cols,
+            )
     
     print("")
     start_time = time.time()
@@ -694,9 +763,9 @@ def train_production(config):
         # Get batch - collect batch_size samples and use proper collation
         # This handles variable number of images per sample correctly
         batch_samples = [next(train_iterator) for _ in range(config.training.batch_size)]
-        batch = collate_batch(
+        batch = collate_fn(
             batch_samples,
-            max_images=config.training.max_images,
+            max_images=max_images_for_dataset,
             image_size=config.model.img_size,
         )
         
@@ -708,7 +777,7 @@ def train_production(config):
                 batch['image'],
                 batch_samples,
                 batch['num_images'],
-                config.training.max_images,
+                max_images_for_dataset,
             )
 
         # DEBUG: Log batch information (occasionally)
@@ -745,6 +814,7 @@ def train_production(config):
                     tokenizer=tokenizer,
                     output_dir=config.checkpoint_dir,
                     max_samples=4,
+                    use_image_grid=config.data.use_image_grid,
                 )
             except Exception as e:
                 print(f"  Warning: Failed to save training batch: {e}")
@@ -810,7 +880,31 @@ def train_production(config):
                 # JAX's memory pool should allow reuse of accumulated_grads memory for forward pass
                 # If this still causes OOM, we'll need to use CPU offloading
                 loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
-                
+
+                # ===== DEBUG: Comprehensive training checks =====
+                if os.environ.get("DEBUG_TRAINING", "0") == "1":
+                    try:
+                        from src.debug_utils import run_comprehensive_check
+
+                        # Get current learning rate
+                        current_lr = lr_schedule(effective_step + 1) if effective_step + 1 <= total_effective_steps else lr_schedule(total_effective_steps)
+
+                        # Run all checks (only for first few steps or occasionally)
+                        if step <= 10 or step % 100 == 1:
+                            run_comprehensive_check(
+                                batch=batch,
+                                params=params,
+                                grads=grads,
+                                loss=float(loss),
+                                step=step,
+                                learning_rate=current_lr,
+                            )
+                    except Exception as e:
+                        print(f"[DEBUG] Error in debug checks: {e}")
+                        import traceback
+                        traceback.print_exc()
+                # ===== END DEBUG =====
+
                 # Convert loss to Python float immediately to free JAX array memory
                 loss_float = float(jax.device_get(loss))
                 accumulated_loss += loss_float
@@ -839,23 +933,23 @@ def train_production(config):
                 if should_update:
                     effective_step += 1
                     lr = lr_schedule(effective_step)
-                    
+
                     # Note: save_training_batch is called before shard_batch (see line 735-750)
                     # to avoid image mixing issues with sharded batches
-                    
+
                     # Apply accumulated gradients with Adam
                     # accumulated_grads is already on GPU, so no transfer needed
                     params, opt_state = apply_accumulated_gradients_adam(
                         params, opt_state, accumulated_grads, optimizer, accum_counter
                     )
                     loss = accumulated_loss / accum_counter
-                    
+
                     # Explicitly free accumulated gradients
                     del accumulated_grads
                     accumulated_grads = None
                     accumulated_loss = 0.0
                     accum_counter = 0
-                    
+
                     # Force garbage collection after update
                     import gc
                     gc.collect()
@@ -925,20 +1019,21 @@ def train_production(config):
             "step_time": step_time,
         })
 
-        # Log to W&B
+        # Log to W&B (use effective_step for x-axis)
         if wandb:
             wandb.log({
                 "train/loss": loss,
                 "train/learning_rate": lr,
-            }, step=step)
+                "train/step": step,  # Also log raw step for reference
+            }, step=effective_step)
 
-        # Log progress
-        if step % config.logging.log_every == 0:
-            # Calculate epoch based on actual steps
-            epoch = step // actual_steps_per_epoch + 1
+        # Log progress (based on effective step)
+        if effective_step % config.logging.log_every == 0:
+            # Calculate epoch based on effective steps
+            epoch = effective_step // effective_steps_per_epoch + 1
             elapsed = time.time() - start_time
-            eta = elapsed / step * (total_steps - step)
-            
+            eta = elapsed / effective_step * (total_effective_steps - effective_step) if effective_step > 0 else 0
+
             # Show both actual step and effective step
             print(
                 f"Step {step:5d}/{total_steps} (effective: {effective_step:5d}/{total_effective_steps}) | "
@@ -948,8 +1043,8 @@ def train_production(config):
                 f"ETA: {eta/60:.1f}min"
             )
 
-        # Validation
-        if step % config.logging.eval_every == 0:
+        # Validation (based on effective step)
+        if effective_step % config.logging.eval_every == 0 and effective_step > 0:
             # Save validation results for debugging
             val_results_path = os.path.join(
                 config.checkpoint_dir,
@@ -990,12 +1085,12 @@ def train_production(config):
                 wandb.log({
                     "valid/accuracy": accuracy,
                     "valid/best_accuracy": best_accuracy,
-                }, step=step)
+                }, step=effective_step)
 
             print()
 
-        # Save checkpoint
-        if step % config.logging.checkpoint_every == 0:
+        # Save checkpoint (based on effective step)
+        if effective_step % config.logging.checkpoint_every == 0 and effective_step > 0:
             # Unreplicate params for saving if using pmap
             save_params = unreplicate_params(params) if use_pmap else params
             save_checkpoint(

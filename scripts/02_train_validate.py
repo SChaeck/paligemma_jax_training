@@ -475,6 +475,31 @@ def train_with_validation(config):
                 else:
                     # Gradient accumulation - compute loss and grads
                     loss, grads = compute_loss_and_grads_for_accum(params, batch, model, trainable_mask)
+
+                    # ===== DEBUG: Comprehensive training checks =====
+                    if os.environ.get("DEBUG_TRAINING", "0") == "1":
+                        try:
+                            from src.debug_utils import run_comprehensive_check
+
+                            # Get current learning rate (lr_schedule is defined earlier)
+                            current_lr = lr_schedule(step)
+
+                            # Run all checks (only for first few steps or occasionally)
+                            if step <= 10 or step % 100 == 1:
+                                run_comprehensive_check(
+                                    batch=batch,
+                                    params=params,
+                                    grads=grads,
+                                    loss=float(loss),
+                                    step=step,
+                                    learning_rate=current_lr,
+                                )
+                        except Exception as e:
+                            print(f"[DEBUG] Error in debug checks: {e}")
+                            import traceback
+                            traceback.print_exc()
+                    # ===== END DEBUG =====
+
                     accumulated_loss += loss
                     if accumulated_grads is None:
                         accumulated_grads = grads
